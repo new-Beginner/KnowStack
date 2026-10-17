@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "local.project-memory-api-probe",
+  "name": "Project Memory API Probe",
+  "version": "0.1.0",
+  "description": "Read-only inspection of reviewed host operations for project memory support.",
+  "i18n": {
+    "en": {
+      "name": "Project Memory API Probe",
+      "description": "Lists reviewed host operations without invoking them.",
+      "safetyNotes": "Requests desktop.control only to list operations. Never invokes operations, edits memory, reads transcripts, accesses files, or makes network requests."
+    },
+    "zh-CN": {
+      "name": "项目记忆 API 检测",
+      "description": "只读列出宿主受审操作，检查项目记忆接口是否存在。",
+      "safetyNotes": "申请 desktop.control 权限仅用于列出操作；不调用操作、不修改记忆、不读取聊天、不访问文件或网络。"
+    }
+  },
+  "author": "Local diagnostic",
+  "main": "main.js",
+  "permissions": ["agent.tool.register", "desktop.control"],
+  "engines": { "piDesktop": ">=0.1.0" },
+  "activationEvents": ["onStartup"],
+  "contributes": {
+    "agentTools": [
+      {
+        "name": "inspect_project_memory_api",
+        "description": "Read-only: list reviewed PI-Desktop host operations and identify project or memory candidates. Never invoke an operation or modify memory.",
+        "risk": "low",
+        "schema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    ]
+  }
+}
