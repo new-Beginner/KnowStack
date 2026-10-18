@@ -3,7 +3,9 @@ import { runNativeJob } from './native-memory.mjs';
 import { unwrapResult, STATUS_LABELS } from './receipt-state.mjs';
 import { createProjectController } from './project-controls.mjs';
 import { installSettingsEntry, SETTINGS_CSS } from './settings-ui.mjs';
-const VERSION = '0.3.0';
+import { createMemoryAccess } from './memory-editor.mjs';
+import { installMemoryEntry, MEMORY_CSS } from './memory-ui.mjs';
+const VERSION = '0.4.1';
 const h = React.createElement;
 let runtime;
 
@@ -88,10 +90,13 @@ export async function onLoad(pi) {
     return dispatch(method, { ...args, lease });
   };
   let projectController;
+  const memoryAccess = createMemoryAccess(globalThis.piDesktop);
+  state.disposers.push(() => memoryAccess.stop());
   if (globalThis.document) {
     projectController = createProjectController({ bridge: globalThis.piDesktop, call });
     state.disposers.push(() => projectController.stop());
     state.disposers.push(installSettingsEntry(pi, projectController));
+    state.disposers.push(installMemoryEntry(pi, memoryAccess));
   }
   const component = makeCard(pi, call, projectController);
   state.disposers.push(pi.ui.injectStyle(`
@@ -103,6 +108,7 @@ export async function onLoad(pi) {
 .knowstack-mode{display:flex;align-items:center;gap:6px;margin-top:12px}.knowstack-memory small{display:block;opacity:.75;margin-top:5px}
 .knowstack-head [data-state=saved]{color:#25745a}.knowstack-head [data-state=unverified]{color:#9b6a16}
 ${SETTINGS_CSS}
+${MEMORY_CSS}
 `));
   for (const toolName of ['read_memory', 'remember']) state.disposers.push(pi.slots.register({ slot: 'toolCard', toolName, component }));
   const poll = async () => {
@@ -111,7 +117,7 @@ ${SETTINGS_CSS}
     try {
       const job = await call('next');
       if (!job || state.stopped) return;
-      const result = await runNativeJob(globalThis.piDesktop, job, { isStopped: () => state.stopped });
+      const result = await memoryAccess.run(() => runNativeJob(globalThis.piDesktop, job, { isStopped: () => state.stopped }));
       if (!state.stopped) await call('report', { id: job.id, result });
     } catch { /* The waiting tool times out safely; do not retry a native write or expose private host errors. */ }
     finally { state.busy = false; }

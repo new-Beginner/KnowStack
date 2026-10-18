@@ -62,8 +62,8 @@ async function rig(t, options = {}) {
     advance:ms=>{clock+=ms;}, writes:()=>calls.filter(c=>c.key.endsWith('Save'))};
 }
 
-test('0.3.0 manifest loads native append tools and visual project settings, with no file or network permissions',()=>{
-  assert.equal(manifest.version,'0.3.0'); assert.equal(manifest.main,'knowstack-main.js');
+test('0.4.1 manifest loads native append tools and visual memory editor, with no file or network permissions',()=>{
+  assert.equal(manifest.version,'0.4.1'); assert.equal(manifest.main,'knowstack-main.js');
   assert.deepEqual(manifest.contributes.agentTools.map(t=>t.name),['read_memory','remember']);
   assert.ok(!manifest.permissions.some(p=>/^fs\.|net\.|desktop\./.test(p)));
   assert.deepEqual(manifest.contributes.agentExtensions,['knowstack-extension.js']);

@@ -12,6 +12,8 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 async function rendererHarness(handler = async method => method === 'mode' ? {autoSave:false} : null) {
   const {unwrapResult,STATUS_LABELS}=await import('../renderer/receipt-state.mjs');
   const {SETTINGS_CSS}=await import('../renderer/settings-ui.mjs');
+  const {createMemoryAccess}=await import('../renderer/memory-editor.mjs');
+  const {MEMORY_CSS}=await import('../renderer/memory-ui.mjs');
   const source=fs.readFileSync(path.join(root,'renderer/knowstack.mjs'),'utf8').replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'');
   const values=[]; const deps=new Map(); const cleanups=new Map(); const effects=[];
   let cursor=0; const intervals=new Set(); const registrations=[]; let disposed=0; const calls=[];
@@ -20,7 +22,7 @@ async function rendererHarness(handler = async method => method === 'mode' ? {au
     useState(initial){const i=cursor++;if(!(i in values))values[i]=initial;return[values[i],v=>{values[i]=typeof v==='function'?v(values[i]):v;}];},
     useEffect(fn,next){const i=cursor++;const previous=deps.get(i);if(!previous||next.some((v,n)=>v!==previous[n])){deps.set(i,next);effects.push(()=>{cleanups.get(i)?.();cleanups.set(i,fn());});}},
   };
-  const sandbox={module:{exports:{}},React,unwrapResult,STATUS_LABELS,SETTINGS_CSS,
+  const sandbox={module:{exports:{}},React,unwrapResult,STATUS_LABELS,SETTINGS_CSS,MEMORY_CSS,createMemoryAccess,
     runNativeJob:async()=>{throw new Error('No native job expected in UI-only tests');},
     console,
     setInterval(fn,ms){const timer={fn,ms,unref(){}};intervals.add(timer);return timer;},

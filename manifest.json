@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "local.project-memory-api-probe",
   "name": "KnowStack",
-  "version": "0.3.0",
+  "version": "0.4.1",
   "description": "Concise, deduplicated native project memory, bound to the originating session, with automatic saving or user approval.",
   "author": "KnowStack",
   "main": "knowstack-main.js",

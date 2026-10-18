@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KnowStack 设置交互测试</title>
 <style>body{margin:0;background:#eef5fa;color:#193a51;font:14px/1.5 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:740px;margin:50px auto;padding:24px}h1{font-size:22px}.plugins-row{display:flex;justify-content:space-between;padding:20px;background:white;margin:16px 0;border:1px solid #dce8f0;border-radius:12px}.plugins-row-id{font-size:12px;color:#627b8e}.plugins-icon-btn{border:0;border-radius:8px;padding:8px 14px;cursor:pointer}.test-status{white-space:pre-wrap}#layers{position:fixed;inset:0;pointer-events:none}</style></head>
-<body><main><h1>KnowStack 0.3.0 设置交互测试</h1><p>仅使用模拟项目，不访问宿主项目或记忆。点击设置查看正式界面。</p>
+<body><main><h1>KnowStack 0.3.1 设置交互测试</h1><p>仅使用模拟项目，不访问宿主项目或记忆。点击设置查看正式界面。</p>
 <div class="plugins-row"><div>知栈 · KnowStack<div class="plugins-row-id">local.project-memory-api-probe</div></div><div class="plugins-row-actions"><button id="settings" class="plugins-icon-btn" aria-label="设置">设置</button><button class="plugins-icon-btn" aria-haspopup="menu">更多</button></div></div>
 <div class="plugins-row"><div>其他插件<div class="plugins-row-id">local.other-plugin</div></div><div class="plugins-row-actions"><button id="other" class="plugins-icon-btn">其他插件设置</button></div></div>
 <button id="run">运行交互回归</button><pre class="test-status" id="results">待运行</pre></main><div id="layers"></div>
@@ -24,7 +24,7 @@ const controller=createProjectController({bridge,call:async(method,args)=>{
  }
  return view();
 }});
-const pi={ui:{openLayer(){const element=document.createElement('div');element.style.cssText='position:absolute;inset:0';document.getElementById('layers').append(element);return{element,close:()=>element.remove()};}}};
+const pi={ui:{openLayer(){const element=document.createElement('div');element.setAttribute('data-pi-layer','');element.style.cssText='position:fixed;top:0;left:0;width:0;height:0;z-index:600';document.getElementById('layers').append(element);return{element,close:()=>element.remove()};}}};
 const uninstall=installSettingsEntry(pi,controller);
 document.getElementById('settings').addEventListener('click',()=>nativeSettingsOpened++);
 let otherOpened=0;document.getElementById('other').addEventListener('click',()=>otherOpened++);
@@ -37,6 +37,7 @@ window.runBrowserTests=async()=>{
  try{
   await controller.refresh();close();
   await run('插件页设置按钮打开专用弹窗，不打开原生表单',async()=>{document.getElementById('settings').focus();document.getElementById('settings').click();check(document.querySelector('[role=dialog]'),'dialog absent');check(nativeSettingsOpened===0,'native form was opened');check(document.querySelectorAll('[role=switch]').length===4,'wrong switch count');check(!document.querySelector('input,textarea'),'raw field present');});
+  await run('宿主零尺寸弹层内遮罩覆盖视口且开关可命中',async()=>{const layer=document.querySelector('[data-pi-layer]');const box=layer.getBoundingClientRect();check(box.width===0&&box.height===0,'fixture must match zero-size host');const backdrop=document.querySelector('.knowstack-settings-backdrop');const rect=backdrop.getBoundingClientRect();check(rect.width>=innerWidth&&rect.height>=innerHeight&&rect.x===0&&rect.y===0,'backdrop does not cover viewport '+JSON.stringify({width:rect.width,height:rect.height,innerWidth,innerHeight}));const button=document.querySelector('[data-ks-key="default"]');const b=button.getBoundingClientRect();check(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)?.closest('button')===button,'switch cannot receive pointer');});
   await run('项目名在左、开关在右，旧关闭值保留',async()=>{const row=[...document.querySelectorAll('.ks-project')].find(r=>r.textContent.includes('论文写作'));check(row.querySelector('[role=switch]').getAttribute('aria-checked')==='false','old choice lost');check(row.querySelector('.ks-copy').getBoundingClientRect().right<=row.querySelector('button').getBoundingClientRect().left,'layout overlap');});
   await run('点击开关后保存并显示成功，焦点保留',async()=>{const button=document.querySelector('[data-ks-key="default"]');button.focus();button.click();await wait();check(autoSave===false,'default not persisted');check(document.querySelector('.ks-status').textContent==='已保存','missing receipt');check(document.activeElement.dataset.ksKey==='default','focus lost');});
   await run('新增项目继承关闭默认值，删除项目移除行',async()=>{groups.push({name:'新项目',roots:[{path:'D:/New'}]});await controller.refresh();check(modes['d:/new']===false,'default not inherited');groups=groups.filter(g=>g.name!=='新项目');await controller.refresh();check(!document.querySelector('.ks-list').textContent.includes('新项目'),'deleted row retained');});

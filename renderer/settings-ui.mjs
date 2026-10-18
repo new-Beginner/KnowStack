@@ -1,7 +1,7 @@
 const PLUGIN_ID = 'local.project-memory-api-probe';
 
 export const SETTINGS_CSS = `
-.knowstack-settings-backdrop{position:absolute;inset:0;display:grid;place-items:center;padding:24px;background:rgba(20,46,65,.32);pointer-events:auto}
+.knowstack-settings-backdrop{position:fixed;inset:0;display:grid;place-items:center;box-sizing:border-box;padding:24px;background:rgba(20,46,65,.32);pointer-events:auto}
 .knowstack-settings{width:min(600px,100%);max-height:calc(100dvh - 64px);display:flex;flex-direction:column;box-sizing:border-box;background:var(--bg-elevated,#f7fbff);color:var(--text-primary,#193a51);border:1px solid var(--border-color,#d7e6ef);border-radius:22px;box-shadow:0 24px 80px #102c4c33;font-family:inherit;font-size:14px;line-height:1.5;overflow:hidden}
 .knowstack-settings header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:24px 24px 16px}.knowstack-settings h2{font-size:19px;margin:0 0 4px;font-weight:650}.knowstack-settings p{margin:0;color:var(--text-secondary,#527089);font-size:13px;line-height:1.6}
 .knowstack-settings button{font:inherit;cursor:pointer}.knowstack-settings button:disabled{cursor:wait;opacity:.55}.knowstack-settings button:focus-visible{outline:3px solid #1689bf;outline-offset:4px}.knowstack-settings .ks-close{border:0;background:transparent;color:inherit;padding:0 6px;font-size:24px;line-height:1.2}
