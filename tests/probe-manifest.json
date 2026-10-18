@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "local.project-memory-api-probe",
+  "name": "Project Memory API Probe",
+  "version": "0.1.4",
+  "main": "main.js",
+  "permissions": ["agent.tool.register", "desktop.control", "renderer.extension"],
+  "renderer": "renderer/probe.mjs",
+  "rendererActions": ["plugin.call"],
+  "rendererCallMethods": ["reportRendererCapabilities", "nextMemoryTest", "reportMemoryTest"],
+  "i18n": {
+    "en": {"name":"Project Memory API Probe","description":"Historical diagnostic fixture.","safetyNotes":"Explicit temporary-card tests only; unsupported internal bridge."},
+    "zh-CN": {"name":"项目记忆 API 检测","description":"原诊断插件的回归测试配置。","safetyNotes":"仅限明确授权的测试；不是正式运行入口。"}
+  },
+  "contributes": {
+    "agentTools": [
+      {"name":"inspect_project_memory_api","description":"Read-only inspection","risk":"low","schema":{"type":"object","properties":{},"additionalProperties":false}},
+      {"name":"test_project_memory_crud","description":"Explicit temporary-card CRUD","risk":"high","schema":{"type":"object","properties":{"confirm":{"type":"boolean","const":true},"expectedProjectPath":{"type":"string","minLength":1}},"required":["confirm","expectedProjectPath"],"additionalProperties":false}},
+      {"name":"write_test_project_memory","description":"Explicit retained test card","risk":"high","schema":{"type":"object","properties":{"confirm":{"type":"boolean","const":true},"expectedProjectPath":{"type":"string","minLength":1}},"required":["confirm","expectedProjectPath"],"additionalProperties":false}}
+    ]
+  }
+}

@@ -1,44 +1,136 @@
-# Project Memory API Probe
+# 知栈 · KnowStack 0.3.0
 
-A local PI-Desktop plugin that checks the reviewed host operation catalog for native project-memory candidates.
+把经过验证、尚未被已有记忆覆盖的项目经验，精简追加到 **PI-Desktop 原生项目记忆**。只用一套记忆，不调用 Jev，不自动改写或删除旧条目。
 
-**This is a read-only diagnostic, not a memory editor.** It does not call `pi.desktop.invoke`, read transcripts or host storage, make network requests, or modify memory. Candidate names alone do not prove read/write support.
+> **默认开启自动保存。** 安装授权后，Agent 提出的合格新记忆可直接写入，不逐条询问。可以关闭本项目自动保存，改为工具卡人工确认。原生记忆写入仍使用内部 Renderer IPC，底层整表保存不是原子操作；执行保存时不要同时手动修改记忆或重载插件。官方插件仓库兼容审核未确认。
+>
+> **升级注意：** 从 0.1.x 升级新增 `agent.extension` 权限，需要显式重新加载并授权。0.2.1 移除了误用的 `session.read`，不新增权限。请停用独立的 `axc00.project-knowledge`（原“项目知识库”）插件，避免它继续注入旧指引或写入 `.workflow/`。
 
-## Load and test in PI-Desktop
+## 开始使用
 
-1. Open Plugins, open the overflow menu, and choose **Load development plugin**.
-2. Select this repository root, which contains `manifest.json`.
-3. Review the requested permissions before granting them.
-4. In an Agent-mode conversation, ask the agent to call `inspect_project_memory_api` from this plugin. ToolSearch can discover it after loading.
+1. 加载当前项目根目录，或安装 `dist/local.project-memory-api-probe-0.3.0.piplug`。
+2. 授予清单中的权限；升级后的新权限不能仅靠热重载自动获得。
+3. 开始一个 Agent 会话，或重启已有会话的 Agent，使新的扩展指引生效。工具目录也可能需要下一轮消息刷新。
+4. 正常完成任务。没有新知识时不会为了凑数生成记忆；出现可复用的新结论时，Agent 先读当前原生记忆，再去重提炼和提交。
+5. 在工具卡核对实际保存结果。自动模式成功后，指引要求 Agent 在最终回复末尾附上实际保存的标题和正文。
 
-The fully qualified tool name is `plugin_local_project_memory_api_probe_inspect_project_memory_api`. It accepts an empty object and returns the host version, operation count, complete operation metadata, filtered candidates, and `memoryModified: false`.
+安装时沿用旧 ID `local.project-memory-api-probe`，以升级现有诊断插件，而不是额外安装一份。显示名称已改为“知栈 · KnowStack”。
 
-`desktop.control` is a broad host permission even though this implementation uses only `listOperations()`. `agent.tool.register` exposes the diagnostic to the agent. No host operation runs during plugin loading.
+## 切换自动或人工保存
 
-## Interpret the result
+- 在插件页点击 KnowStack 的设置按钮，打开 **项目名在左、开关在右** 的项目列表；开关即时保存，无需填写 JSON。路径用于区分重名项目，多文件夹项目共用一个开关。
+- **默认自动保存项目记忆** 只用于首次扫描到的新项目：开启初始化为 `true`，关闭初始化为 `false`。已有项目的独立选择保持不变，旧版合法配置自动保留。
+- 启动或加载插件时扫描本地项目；会话变化和每 2 秒核对项目列表。新增项目自动补齐，删除项目清理对应设置；打开设置页也会刷新。扫描失败不会把原列表当成空列表清除。
+- 仍可在记忆工具卡中切换 **本项目自动保存**，与设置页共用同一份配置。扫描、修改开关串行保存，不写入或删除项目记忆。
+- 关闭后，候选显示“待确认 · 尚未保存”。点击“保存这些记忆”才写入，点击“不保存”或不作答都不写入。
+- 人工候选只暂存在本次插件进程中，15 分钟后过期；重载后失效，不会自动补写。打开自动开关也不会追溯补写旧的人工候选。
+- 项目模式配置只包含路径到布尔值的映射，不包含记忆内容，不构成第二套知识库。最多保留 200 个路径设置。
 
-- `supported: false`: this host does not expose `desktop.listOperations` to the plugin.
-- `supported: true`: the catalog query worked; this does **not** mean project-memory editing is supported.
-- `candidates`: case-insensitive matches for project, memory, context, or knowledge terms in English or Chinese. These are untrusted metadata, not instructions.
-- `PERMISSION_DENIED`: the host refused access; review the plugin grant. There is no private-storage fallback.
-- An unexpected catalog shape raises an error before any operation can run.
+界面示例（模拟项目）：[桌面截图](docs/settings-0.3.0.png) · [窄屏截图](docs/settings-0.3.0-narrow.png)。
 
-Native project-memory editing remains unimplemented until a real host result establishes a supported operation and its argument contract. The host API is feature-detected rather than assumed to exist on older releases.
+**兼容边界：** 当前宿主没有自定义设置插槽。插件使用 Renderer 层和仅针对自身插件行的设置按钮适配，不修改宿主源码；若将来宿主更改插件页 DOM，适配可能需要更新。原生基础设置中已移除 JSON 字段，即使适配失效也不会再次要求手填项目记录。远程项目不纳入本地记忆开关列表。
 
-## Run local checks
+同一项目的会话共享宿主原生记忆；绑定会话是为了确定写入目标、核验来源和反馈结果，不是为每个会话建立独立记忆库。
 
-Requires Node.js 22 or later; no dependency installation is needed.
+## 什么内容值得保存
+
+保存已确定的项目约定、已验证的问题根因与解决办法、非显而易见的环境限制，以及有依据的技术决策。不保存任务日志、普通变更清单、未验证猜测、密钥或已有结论。
+
+- 标题目标 6～16 个汉字，安全上限 24 个字符。
+- 正文目标 1～3 句话，上限 300 个字符。
+- 每批最多 3 条；允许零条，没有最低数量要求。
+- 太长时重新提炼，不机械截断。插件会拒绝超限输入，并对明显的凭证格式做有限拦截；这不替代模型的敏感信息判断。
+
+示例：
+
+> **原生记忆整表保存**
+> 原生记忆接口保存完整条目列表。新增前须重读并保留其他条目，保存后回读验证；保存前比对不能完全消除并发覆盖风险。
+
+## 去重与写入保护
+
+1. 宿主在 Agent 启动时读入原生项目记忆，不是每轮实时刷新。插件不重复全量注入旧知识块。
+2. 有可能值得保存的新结论时，Agent 调用 `read_memory` 获取当前原生条目和读取凭证，比较语义与适用条件。
+3. `remember` 必须携带同一会话、同一轮的有效凭证；凭证 5 分钟后失效。
+4. 本地拦截相同正文、同标题的候选及批内重复。相同标题下的补充或纠正直接跳过，本版不自动更新任何旧条目。
+5. 保存前重查会话项目归属和唯一项目组，比较原生记忆快照；发生变化则停止，要求重新读取、判断，不盲目重试。
+6. 只追加，保留其他条目。保存后回读验证旧条目和新增条目都完整存在，才发出成功回执。
+7. 原生条目 ID 由规范化正文的哈希稳定生成；同一请求不会因为重复投递就不断新增。
+
+**保证边界：**语义去重及提炼时机依赖任务 Agent 执行扩展指引，不能承诺每轮必定提炼或所有同义改写都能识别。没有另起后台总结模型，也不额外调用外部审核服务。插件内队列串行执行，但不能阻止其他窗口／插件在检查与保存之间修改整表，或在最后一次核验后移动会话；底层接口没有原子比较并保存能力。
+
+## 查看保存结果与处理失败
+
+| 状态／代码 | 含义与处理 |
+| --- | --- |
+| `saved` | 已完成写入和回读，工具卡展示实际保存的标题与正文 |
+| `awaiting_review` | 尚未保存，等待真实用户点击工具卡 |
+| `skipped` | 重复或已存在同主题；普通重复不显示空卡片 |
+| `STALE_BASIS` / `CONCURRENT_CHANGE` | 记忆已变化；重新读取并判断增量，不原样重发 |
+| `SESSION_MOVED` / `PROJECT_MEMBERSHIP_CHANGED` | 会话或所属项目组变化，旧请求停止 |
+| `UNSTRUCTURED_MEMORY` / `NONCANONICAL_MEMORY` | 旧式正文或无法安全保留的结构，拒绝自动转换和覆盖 |
+| `unverified` | 保存可能已经发生但无法验证；检查原生记忆，不重新提交，不自动删除／回滚 |
+| `PREVIOUS_WRITE_UNVERIFIED` | 本次插件加载内该目标被阻止继续写入，先人工核对原生记忆 |
+| `RENDERER_NOT_READY` / `BRIDGE_TIMEOUT` | 检查插件权限、Renderer 加载及宿主版本；超时若可能发生写入，按不确定结果处理 |
+
+人工确认发生在最终文字回复之后时，原回复“待确认”不会被回写；工具卡更新为真实保存回执。它是最终状态依据。故障状态和待审核状态绝不能标为“已保存”。
+
+不确定结果的阻止状态、读取凭证和待审核候选均为临时状态。重载不会证明上次保存成功或失败，不能用重载作为绕过检查、盲目重试的理由。
+
+## Agent 工具
+
+工具通过 ToolSearch 激活，完整名称保留旧插件 ID 前缀：
+
+| 工具 | 输入 | 作用 |
+| --- | --- | --- |
+| `plugin_local_project_memory_api_probe_read_memory` | `{}` | 根据可信执行上下文读取当前会话的原生项目记忆；返回 `readToken`、条目和当前模式 |
+| `plugin_local_project_memory_api_probe_remember` | `readToken`, `items[]` | 提交真正的新记忆；自动保存或等待工具卡确认 |
+
+`items[]` 每项只有 `title` 和 `content`。调用方不能指定目标会话、项目路径、旧条目或删除行为：目标来自宿主工具执行上下文的 `sessionId` / `turnId`。缺少这些可信信息时拒绝保存。
+
+## 权限、数据和运行入口
+
+| 权限 | 用途 |
+| --- | --- |
+| `agent.tool.register` | 注册读取和追加记忆工具 |
+| `agent.extension` | 注入固定的提炼／去重／回执指引，不读写文件知识库 |
+| `renderer.extension` | 真实确认卡、项目开关及固定内部 IPC 记忆读写 |
+
+没有文件读写、网络、`session.read.own` 或 `desktop.control` 权限。项目归属查询与保存前后核验统一复用 Renderer 内部固定 `sessionGet` 通道，限制为 1 条消息、1 字符内容；仅向插件服务返回会话 ID、项目路径和本地来源标记，消息正文不回传 Agent，也不用于提炼。0.2.0 误用了需要 `session.read.own` 的 `pi.session.get()`；`session.read` 实际仅用于当前模型上下文，不能授权该 API。实际记忆内容只来自原生记忆接口。不开启任意 IPC、直接数据库写入或宿主源码修改。
+
+| 文件 | 作用 |
+| --- | --- |
+| `knowstack-main.js` | 正式插件入口，注册工具与 Renderer 回调 |
+| `memory-service.js` | 会话凭证、项目开关、保存队列、人工确认状态 |
+| `renderer/native-memory.mjs` | 固定 IPC，项目组核验、去重、只追加与回读 |
+| `renderer/knowstack.mjs` | Renderer 工作循环、工具卡和项目开关 |
+| `project-settings.js` | 设置读写队列、旧值迁移、项目扫描同步与多文件夹模式 |
+| `renderer/project-controls.mjs` | 固定项目列表读取、事件与定时核对、设置状态 |
+| `renderer/settings-ui.mjs` | 项目名＋开关弹窗、自身插件页设置入口适配 |
+| `knowstack-extension.js` | Agent 收尾指引和已验证的保存回执 |
+
+`project-knowledge-source/` 及旧 `main.js`、`memory-jobs.js`、`renderer/probe.mjs`、`renderer/memory-test.mjs` 为保留的参考／诊断代码，**不由当前 manifest 加载**。旧诊断测试固定使用 `tests/probe-manifest.json`。历史说明见 [0.1.x 归档](docs/legacy-probe.md)，不会自动迁移或删除旧 `.workflow/` 文件。
+
+## 检查与打包
+
+需要 Node.js 22 或更高版本，无第三方依赖。以下命令从项目根目录运行：
 
 ```bash
-node --check main.js
-node --test tests/probe.test.cjs
+node --check knowstack-main.js
+node --check memory-service.js
+node --check project-settings.js
+node --check renderer/project-controls.mjs
+node --check renderer/settings-ui.mjs
+node --check knowstack-extension.js
+node --check renderer/native-memory.mjs
+node --check renderer/receipt-state.mjs
+node --check renderer/knowstack.mjs
+node --test tests/*.test.cjs
 ```
 
-Tests run against a simulated host. The memory operation names in fixtures are fictional and are not evidence of real host APIs.
+然后使用 PI-Desktop 的 `PluginCheck(directory=".")` 与 `PluginPack(directory=".")`，生成 `dist/local.project-memory-api-probe-0.3.0.piplug`。不要手工压缩安装包。
 
-Use PI-Desktop's `PluginCheck` on `.` before `PluginPack`. The expected first package is `dist/local.project-memory-api-probe-0.1.0.piplug`. Do not build packages with a generic ZIP tool. Increment the manifest version for subsequent releases.
+0.3.0 的新增功能已用 Node 回归和真实 Chrome DOM（模拟项目数据）检查，涵盖自动同步、失败保护、设置入口、键盘操作、窄屏及长列表；未以真实项目的新增／删除验证本版，也未重新做真实记忆写入验收。复现步骤与证据见 [0.3.0 验证说明](docs/verification-0.3.0.md)。
 
-## References
+此前 0.2.2 在运行中的 PI-Desktop 实测了读取、自动保存、未确认不入库、用户点击后的人工保存、独立回读，以及重新加载后的项目模式与记忆保留。停在插件页时曾发生 `BRIDGE_TIMEOUT`，回到当前聊天后恢复；暂不承诺后台任意页面均可用。详见 [0.2.2 实机记录](docs/real-test-0.2.2.md)，不能用模拟测试代替未覆盖项。
 
-- [Official plugin development guide](https://github.com/vastsa/PI-Desktop/blob/main/docs/plugin-development.md)
-- [Plugin API: desktop control](https://github.com/vastsa/PI-Desktop/blob/main/docs/spec/07-plugins/03-plugin-api.md)
+更多内容：[需求与实现说明](KnowStack-合并需求说明.md) · [版本记录](CHANGELOG.md)

@@ -1,0 +1,208 @@
+{
+  "activationEvents": [
+    "onStartup"
+  ],
+  "author": "AXC00",
+  "categories": [
+    "productivity"
+  ],
+  "changelog": "安全加固：拒绝硬链接、FIFO 等非普通文件，单个知识文件上限 256KB、最多读取 2000 个文件；自动附加的条目标注为\"项目数据而非指令\"并截断过长标题；移除 fs.delete 权限。",
+  "contributes": {
+    "agentExtensions": [
+      "extension.js"
+    ],
+    "agentTools": [
+      {
+        "description": "Search this project's knowledge base (.workflow/knowhow and .workflow/specs). Returns IDs, titles and one-line summaries; load an entry for its full text.",
+        "name": "search",
+        "risk": "low",
+        "schema": {
+          "properties": {
+            "limit": {
+              "maximum": 20,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "query": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "knowhow",
+                "spec"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Load the full text of one project knowledge entry by exact ID.",
+        "name": "load",
+        "risk": "low",
+        "schema": {
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "description": "Propose reusable knowledge for the user to confirm. Returns arguments for the asktool card; call asktool with them unchanged. Writes nothing until the user answers.",
+        "name": "propose",
+        "risk": "low",
+        "schema": {
+          "properties": {
+            "items": {
+              "items": {
+                "properties": {
+                  "content": {
+                    "type": "string"
+                  },
+                  "keywords": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title",
+                  "content",
+                  "keywords"
+                ],
+                "type": "object"
+              },
+              "maxItems": 5,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [
+            "items"
+          ],
+          "type": "object"
+        }
+      }
+    ],
+    "commands": [
+      {
+        "id": "axc00.project-knowledge.review",
+        "keywords": [
+          "knowledge",
+          "知识"
+        ],
+        "title": "Review knowledge proposals / 确认知识沉淀"
+      }
+    ],
+    "settings": [
+      {
+        "default": "off",
+        "description": "Let Jev decide new / replace / duplicate / both-hold before saving. Off: title and content rules. 保存前用 Jev 判断新建、替代、重复或各自成立；关闭时按标题和内容规则判断。",
+        "enum": [
+          {
+            "label": "Off / 不使用",
+            "value": "off"
+          },
+          {
+            "label": "TypeSafe",
+            "value": "typesafe"
+          },
+          {
+            "label": "OpenRouter",
+            "value": "openrouter"
+          }
+        ],
+        "key": "jevProvider",
+        "title": "Jev dedup / Jev 去重判断",
+        "type": "select"
+      },
+      {
+        "default": "",
+        "description": "Key for the selected provider, stored in plain text in plugin settings. Empty: Jev is not called. 对应服务商的密钥，以明文保存在插件设置中；留空则不调用 Jev。",
+        "key": "jevApiKey",
+        "title": "Jev API key / Jev 密钥",
+        "type": "string"
+      },
+      {
+        "default": "",
+        "description": "Empty uses jev-latest (TypeSafe) or typesafe/jev-1.13 (OpenRouter). 留空使用默认模型。",
+        "key": "jevModel",
+        "title": "Jev model (optional) / Jev 模型（可选）",
+        "type": "string"
+      }
+    ]
+  },
+  "description": "A per-project knowledge base. Relevant entries are attached to each message automatically, and new lessons are saved only after you confirm them on an in-chat card.",
+  "engines": {
+    "piDesktop": ">=0.15.9"
+  },
+  "fs": {
+    "read": {
+      "root": "workspace",
+      "scope": [
+        ".workflow/**"
+      ]
+    },
+    "write": {
+      "root": "workspace",
+      "scope": [
+        ".workflow/knowhow/**",
+        ".workflow/knowledge-inbox/**"
+      ]
+    }
+  },
+  "homepage": "https://github.com/AXC00/pi-desktop-plugins-skills/tree/main/plugins/axc00.project-knowledge",
+  "i18n": {
+    "en": {
+      "name": "Project Knowledge",
+      "description": "A per-project knowledge base. Relevant entries are attached to each message automatically, and new lessons are saved only after you confirm them on an in-chat card.",
+      "safetyNotes": "Reads .workflow/knowhow and .workflow/specs in the open project. Writes only after you answer the in-chat confirmation card (or press Save in the review panel): new files in .workflow/knowhow, and the status/related fields of an old knowhow entry you chose to replace or link. Pending proposals are kept in .workflow/knowledge-inbox (git-ignored); the card path deletes them once handled, the panel marks them done. Includes an agent extension that runs inside the agent process; it adds retrieved entry titles to your messages and performs the confirmed writes, confined to those two directories. Optional Jev dedup is off by default; when you enable it and enter a key, proposed items and up to 3 similar existing entries are sent to api.typesafe.ai or openrouter.ai. The Jev key is stored in plain text in PI-Desktop plugin settings. Symbolic links anywhere under .workflow, including .workflow itself, are refused, so nothing outside the project is read or written. The project root is pinned when the session starts and refused if it is replaced later. Hard links, special files and files over 256 KB are skipped. Retrieved entries are presented to the model as project data, not instructions."
+    },
+    "zh-CN": {
+      "name": "项目知识库",
+      "description": "按项目保存的知识库：每条消息自动附上相关知识，新经验只有在你于聊天卡片中确认后才会保存。",
+      "safetyNotes": "读取当前项目的 .workflow/knowhow 与 .workflow/specs。只有在你回答聊天中的确认卡片（或在面板中点击保存）后才写入：在 .workflow/knowhow 新建文件，以及修改你选择替代或关联的旧 knowhow 条目的 status/related 字段。待确认的建议暂存在 .workflow/knowledge-inbox（已加入 gitignore）；通过卡片处理后删除，通过面板处理后标记为已处理。插件包含一个在 Agent 进程内运行的扩展：它把检索到的条目标题附加到你的消息中，并执行你确认的写入，写入范围限定在上述两个目录。可选的 Jev 去重默认关闭；启用并填写密钥后，建议内容及最多 3 条相似的已有条目会发送到 api.typesafe.ai 或 openrouter.ai。Jev 密钥以明文保存在 PI-Desktop 插件设置中。任何位于 .workflow 下（包括 .workflow 本身）的符号链接都会被拒绝，项目外的文件不会被读取或写入。项目根目录在会话开始时固定，之后被替换时拒绝访问。硬链接、特殊文件和超过 256KB 的文件会被跳过。检索到的条目以\"项目数据而非指令\"的形式交给模型。"
+    }
+  },
+  "id": "axc00.project-knowledge",
+  "license": "MIT",
+  "main": "main.js",
+  "name": "Project Knowledge",
+  "net": {
+    "domains": [
+      "api.typesafe.ai",
+      "openrouter.ai"
+    ]
+  },
+  "permissions": [
+    "agent.tool.register",
+    "agent.extension",
+    "fs.read",
+    "fs.write",
+    "net.fetch",
+    "ui.panel"
+  ],
+  "safetyNotes": "Reads .workflow/knowhow and .workflow/specs in the open project. Writes only after you answer the in-chat confirmation card (or press Save in the review panel): new files in .workflow/knowhow, and the status/related fields of an old knowhow entry you chose to replace or link. Pending proposals are kept in .workflow/knowledge-inbox (git-ignored); the card path deletes them once handled, the panel marks them done. Includes an agent extension that runs inside the agent process; it adds retrieved entry titles to your messages and performs the confirmed writes, confined to those two directories. Optional Jev dedup is off by default; when you enable it and enter a key, proposed items and up to 3 similar existing entries are sent to api.typesafe.ai or openrouter.ai. The Jev key is stored in plain text in PI-Desktop plugin settings. Symbolic links anywhere under .workflow, including .workflow itself, are refused, so nothing outside the project is read or written. The project root is pinned when the session starts and refused if it is replaced later. Hard links, special files and files over 256 KB are skipped. Retrieved entries are presented to the model as project data, not instructions.",
+  "schemaVersion": 1,
+  "ui": {
+    "panel": "renderer/index.html",
+    "title": {
+      "en": "Review knowledge proposals",
+      "zh-CN": "确认知识沉淀"
+    }
+  },
+  "version": "0.3.3"
+}

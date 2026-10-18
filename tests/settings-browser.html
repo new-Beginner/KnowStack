@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KnowStack 设置交互测试</title>
+<style>body{margin:0;background:#eef5fa;color:#193a51;font:14px/1.5 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:740px;margin:50px auto;padding:24px}h1{font-size:22px}.plugins-row{display:flex;justify-content:space-between;padding:20px;background:white;margin:16px 0;border:1px solid #dce8f0;border-radius:12px}.plugins-row-id{font-size:12px;color:#627b8e}.plugins-icon-btn{border:0;border-radius:8px;padding:8px 14px;cursor:pointer}.test-status{white-space:pre-wrap}#layers{position:fixed;inset:0;pointer-events:none}</style></head>
+<body><main><h1>KnowStack 0.3.0 设置交互测试</h1><p>仅使用模拟项目，不访问宿主项目或记忆。点击设置查看正式界面。</p>
+<div class="plugins-row"><div>知栈 · KnowStack<div class="plugins-row-id">local.project-memory-api-probe</div></div><div class="plugins-row-actions"><button id="settings" class="plugins-icon-btn" aria-label="设置">设置</button><button class="plugins-icon-btn" aria-haspopup="menu">更多</button></div></div>
+<div class="plugins-row"><div>其他插件<div class="plugins-row-id">local.other-plugin</div></div><div class="plugins-row-actions"><button id="other" class="plugins-icon-btn">其他插件设置</button></div></div>
+<button id="run">运行交互回归</button><pre class="test-status" id="results">待运行</pre></main><div id="layers"></div>
+<script type="module">
+import {createProjectController} from '../renderer/project-controls.mjs';
+import {installSettingsEntry,SETTINGS_CSS} from '../renderer/settings-ui.mjs';
+const style=document.createElement('style');style.textContent=SETTINGS_CSS;document.head.append(style);
+const sample=[{name:'KnowStack',roots:[{path:'D:/Projects/KnowStack'}]},{name:'泥石流数值模拟',roots:[{path:'D:/Research/DebrisFlow'}]},{name:'论文写作',roots:[{path:'D:/Research/Manuscript'}]}];
+let groups=structuredClone(sample),autoSave=true,modes={'d:/research/manuscript':false},projects=[],failSave=false,failScan=false,nativeSettingsOpened=0;
+const view=()=>({autoSave,projects:projects.map(p=>({...p,autoSave:modes[p.path]}))});
+const bridge={channels:{invoke:{projectGroupList:'groups'}},invoke:async()=>{if(failScan)throw Error('offline');return{ok:true,data:{groups:structuredClone(groups)}};}};
+const controller=createProjectController({bridge,call:async(method,args)=>{
+ if(method!=='projects')throw Error('Unexpected method');
+ if(args.action==='sync'){
+  projects=args.projects;const next={};for(const p of projects)for(const path of p.paths)next[path]=modes[p.path]??autoSave;modes=next;
+ }else{
+  await new Promise(resolve=>setTimeout(resolve,20));if(failSave)throw Error('refused');
+  if(args.action==='default')autoSave=args.autoSave;
+  else if(args.action==='set'){const p=projects.find(p=>p.path===args.path);if(!p)throw Error('deleted');for(const path of p.paths)modes[path]=args.autoSave;}
+ }
+ return view();
+}});
+const pi={ui:{openLayer(){const element=document.createElement('div');element.style.cssText='position:absolute;inset:0';document.getElementById('layers').append(element);return{element,close:()=>element.remove()};}}};
+const uninstall=installSettingsEntry(pi,controller);
+document.getElementById('settings').addEventListener('click',()=>nativeSettingsOpened++);
+let otherOpened=0;document.getElementById('other').addEventListener('click',()=>otherOpened++);
+const wait=async()=>{for(let i=0;i<100;i++){await new Promise(resolve=>setTimeout(resolve,5));if(!controller.getState().busy)return;}throw Error('timeout');};
+const check=(yes,message)=>{if(!yes)throw Error(message);};
+const close=()=>document.querySelector('.ks-done')?.click();
+window.testApp={controller,open:()=>document.getElementById('settings').click(),setGroups:value=>{groups=value;return controller.refresh();},sample,dispose:()=>{uninstall();controller.stop();}};
+window.runBrowserTests=async()=>{
+ const passed=[];const run=async(name,fn)=>{await fn();passed.push(name);};
+ try{
+  await controller.refresh();close();
+  await run('插件页设置按钮打开专用弹窗，不打开原生表单',async()=>{document.getElementById('settings').focus();document.getElementById('settings').click();check(document.querySelector('[role=dialog]'),'dialog absent');check(nativeSettingsOpened===0,'native form was opened');check(document.querySelectorAll('[role=switch]').length===4,'wrong switch count');check(!document.querySelector('input,textarea'),'raw field present');});
+  await run('项目名在左、开关在右，旧关闭值保留',async()=>{const row=[...document.querySelectorAll('.ks-project')].find(r=>r.textContent.includes('论文写作'));check(row.querySelector('[role=switch]').getAttribute('aria-checked')==='false','old choice lost');check(row.querySelector('.ks-copy').getBoundingClientRect().right<=row.querySelector('button').getBoundingClientRect().left,'layout overlap');});
+  await run('点击开关后保存并显示成功，焦点保留',async()=>{const button=document.querySelector('[data-ks-key="default"]');button.focus();button.click();await wait();check(autoSave===false,'default not persisted');check(document.querySelector('.ks-status').textContent==='已保存','missing receipt');check(document.activeElement.dataset.ksKey==='default','focus lost');});
+  await run('新增项目继承关闭默认值，删除项目移除行',async()=>{groups.push({name:'新项目',roots:[{path:'D:/New'}]});await controller.refresh();check(modes['d:/new']===false,'default not inherited');groups=groups.filter(g=>g.name!=='新项目');await controller.refresh();check(!document.querySelector('.ks-list').textContent.includes('新项目'),'deleted row retained');});
+  await run('失败不会假装保存；项目读取失败不清空列表',async()=>{failSave=true;const button=document.querySelector('[data-ks-key="d:/projects/knowstack"]');button.click();await wait();check(modes['d:/projects/knowstack']===true,'failed save changed data');check(document.querySelector('[role=alert]'),'missing failure');failSave=false;failScan=true;await controller.refresh().catch(()=>{});check(document.querySelectorAll('.ks-project').length===3,'error cleared list');failScan=false;await controller.refresh();});
+  await run('项目名称按文本展示，不执行 HTML',async()=>{groups.push({name:'<img src=x onerror=alert(1)>',roots:[{path:'D:/Untrusted'}]});await controller.refresh();check(!document.querySelector('.ks-list img'),'HTML executed');groups=structuredClone(sample);await controller.refresh();});
+  await run('键盘焦点循环及 Escape 关闭恢复入口焦点',async()=>{const done=document.querySelector('.ks-done');done.focus();done.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true,cancelable:true}));check(document.activeElement.className==='ks-close','tab escaped');document.querySelector('[role=dialog]').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));check(!document.querySelector('[role=dialog]'),'escape failed');check(document.activeElement.id==='settings','entry focus not restored');});
+  await run('其他插件设置不受影响，重复打开不叠加',async()=>{document.getElementById('other').click();check(otherOpened===1,'other plugin intercepted');document.getElementById('settings').click();document.getElementById('settings').click();check(document.querySelectorAll('[role=dialog]').length===1,'duplicate layer');});
+  await run('长列表保持在视口内并可滚动，名称与开关不重叠',async()=>{await controller.refresh();groups=Array.from({length:60},(_,i)=>({name:'长项目名称用于检查窄屏自动换行'+i,roots:[{path:'D:/Research/LongProjectDirectory/Case'+i}]}));await controller.refresh();const dialog=document.querySelector('[role=dialog]');const rect=dialog.getBoundingClientRect();const body=dialog.querySelector('.ks-body');check(rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight,'dialog overflow');check(body.scrollHeight>body.clientHeight,'list not scrollable '+JSON.stringify({scroll:body.scrollHeight,client:body.clientHeight,overflow:getComputedStyle(body).overflowY,dialog:rect.height,viewport:innerHeight,connected:body.isConnected}));const row=dialog.querySelector('.ks-project');check(row.querySelector('.ks-copy').getBoundingClientRect().right<=row.querySelector('button').getBoundingClientRect().left,'switch overlap');groups=structuredClone(sample);await controller.refresh();});
+  const result={passed:passed.length,failed:0,tests:passed};document.getElementById('results').textContent=JSON.stringify(result,null,2);return result;
+ }catch(error){const result={passed:passed.length,failed:1,error:error.message,tests:passed};document.getElementById('results').textContent=JSON.stringify(result,null,2);return result;}
+};
+document.getElementById('run').onclick=()=>window.runBrowserTests();
+if(new URLSearchParams(location.search).has('autorun'))void window.runBrowserTests();
+</script></body></html>
