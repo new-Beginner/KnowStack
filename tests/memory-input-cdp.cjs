@@ -72,7 +72,7 @@ let ws;
       assert.equal(await evaluate('(() => { const r=document.querySelector("[role=alertdialog]").getBoundingClientRect(); return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight; })()'), true);
       if (scenario === 'cancel-delete') {
         const screenshot = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
-        fs.writeFileSync(path.join(root, 'docs', `confirmation-0.4.3${width < 500 ? '-narrow' : ''}.png`), Buffer.from(screenshot.data, 'base64'));
+        fs.writeFileSync(path.join(process.env.KNOWSTACK_SCREENSHOT_DIR || path.join(root, 'docs'), `confirmation-0.4.3${width < 500 ? '-narrow' : ''}.png`), Buffer.from(screenshot.data, 'base64'));
         await click('.km-confirm-cancel');
       } else if (scenario === 'escape-delete') {
         await key('Tab', 9); assert.equal(await evaluate('document.activeElement.className'), 'km-confirm-accept');

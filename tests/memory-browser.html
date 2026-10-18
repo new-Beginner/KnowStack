@@ -5,16 +5,18 @@
 <script type="module">
 import {createMemoryAccess} from '../renderer/memory-editor.mjs';
 import {installMemoryEntry,MEMORY_CSS} from '../renderer/memory-ui.mjs';
-import {contextFromStore} from '../renderer/panel-context.mjs';
+import {connectPanelContext} from '../renderer/panel-context.mjs';
 const style=document.createElement('style');style.textContent=MEMORY_CSS;document.head.append(style);
 const sample=[{id:'ga',name:'A · 知栈',roots:[{path:'D:/Projects/KnowStack'}]},{id:'gb',name:'B · 泥石流数值模拟',roots:[{path:'D:/Research/DebrisFlow'}]}];
 const initial=[{id:'a',title:'会话项目归属查询',content:'根据发起会话核验项目归属；切换聊天时，旧请求不能写入其他项目。'},{id:'b',title:'原生记忆整表并发边界',content:'原生记忆写入提交完整条目列表；保存前比对快照，保存后回读确认。保存期间避免同时编辑记忆或重载插件。'}];
 let groups=structuredClone(sample),stores={ga:structuredClone(initial),gb:[]},writes=0,revision=0,offline=false,lostResponse=false,prompts=[];
 let panelState={activeSessionId:'sb',activeProjectPath:'D:/Research/DebrisFlow',sessions:[{id:'sa',projectPath:'D:/Projects/KnowStack'},{id:'sb',projectPath:'D:/Research/DebrisFlow'}]};
-const panelListeners=new Set();
-const panelContext=contextFromStore({getState:()=>panelState,subscribe(fn){panelListeners.add(fn);return()=>panelListeners.delete(fn);}});
-const switchPanel=id=>{panelState={...panelState,activeSessionId:id,activeProjectPath:panelState.sessions.find(s=>s.id===id)?.projectPath??null};for(const fn of panelListeners)fn();};
-const connectContext=async()=>panelContext;
+const activeContexts=new Set();
+const identity=document.createElement('div');identity.className='sidebar';document.body.append(identity);
+const showIdentity=(id,path=null)=>{identity.replaceChildren();if(id){const pane=document.createElement('div');pane.setAttribute('data-session-pane',id);pane.setAttribute('data-visible','true');identity.append(pane);}else if(path){const project=document.createElement('section');project.setAttribute('data-sidebar-project-group',path);project.setAttribute('data-current-workspace','true');identity.append(project);}};
+const switchPanel=id=>{panelState={...panelState,activeSessionId:id,activeProjectPath:panelState.sessions.find(s=>s.id===id)?.projectPath??null};showIdentity(id);};
+showIdentity('sb');
+const connectContext=async(doc,options)=>{const context=await connectPanelContext(doc,options);activeContexts.add(context);return{...context,stop(){context.stop();activeContexts.delete(context);}};};
 window.confirm=message=>{prompts.push(message);return true;};
 const keys=['sessionGet','projectGroupList','projectGroupMemoryGet','projectGroupMemorySave','projectMemoryGet','projectMemorySave'];
 const bridge={channels:{invoke:Object.fromEntries(keys.map(k=>[k,k]))},async invoke(key,input){
@@ -30,7 +32,7 @@ const pi={ui:{openLayer(){const element=document.createElement('div');element.se
 let uninstall=installMemoryEntry(pi,access,document,{connectContext});
 const check=(yes,message)=>{if(!yes)throw Error(message);};
 const pause=()=>new Promise(resolve=>setTimeout(resolve,5));
-const wait=async()=>{for(let i=0;i<400;i++){await pause();if(document.querySelector('.km-refresh')&&!document.querySelector('.km-refresh').disabled)return;}throw Error('timeout');};
+const wait=async()=>{for(let i=0;i<400;i++){await pause();if(document.querySelector('.km-refresh')&&!document.querySelector('.km-refresh').disabled&&!document.querySelector('.km-error')?.textContent.includes('正在切换'))return;}throw Error('timeout');};
 const open=async()=>{document.querySelector('.knowstack-memory-entry').focus();document.querySelector('.knowstack-memory-entry').click();await wait();};
 const close=()=>document.querySelector('.km-cancel')?.click();
 const respond=accepted=>{const node=document.querySelector(accepted?'.km-confirm-accept':'.km-confirm-cancel');check(node,'missing inline confirmation');node.click();};
@@ -56,9 +58,10 @@ window.runBrowserTests=async()=>{
   await run('失败读取保留列表，标题正文作为文本处理',async()=>{offline=true;reread();await wait();check(document.querySelectorAll('.km-item').length===3,'failure cleared cards');check(!document.querySelector('.km-error').hidden,'error hidden');offline=false;stores.ga[0].title='<img src=x onerror=alert(1)>';stores.ga[0].content='<script>bad()<\/script>';reread();await wait();check(!document.querySelector('.km-list img,.km-list script'),'HTML executed');});
   await run('键盘循环与 Escape 关闭后恢复入口焦点',async()=>{document.querySelector('.km-cancel').focus();document.querySelector('.km-cancel').dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true,cancelable:true}));check(document.activeElement.className==='km-close','tab escaped');document.querySelector('[role=dialog]').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));check(!document.querySelector('[role=dialog]'),'escape failed');check(document.activeElement.classList.contains('knowstack-memory-entry'),'entry focus lost');});
   await run('宿主重绘右侧列表后入口重挂载且不破坏宿主按钮',async()=>{const list=document.querySelector('.work-panel-launcher-list');const replacement=document.createElement('div');replacement.className='work-panel-launcher-list';replacement.append(document.getElementById('host-action'));list.replaceWith(replacement);await pause();check(document.querySelectorAll('.knowstack-memory-entry').length===1,'entry not remounted');check(document.getElementById('host-action')&&document.getElementById('left-host-action'),'host button removed');});
+  await run('无聊天项目使用当前项目标记，且能恢复到活动会话',async()=>{await open();showIdentity(null,'D:/Research/DebrisFlow');await wait();check(document.querySelector('select').value==='group:gb','no-chat project not followed');switchPanel('sa');await wait();check(document.querySelector('select').value==='group:ga','session not restored');close();});
   await run('当前面板无项目时不回退首项目，恢复项目后自动读取',async()=>{await open();switchPanel(null);await wait();check(document.querySelector('select').value==='','fallback project selected');check(document.querySelectorAll('.km-item').length===0,'old project shown as current');check(document.querySelector('.km-error').textContent.includes('没有本地项目'),'no context warning');switchPanel('sa');await wait();check(document.querySelector('select').value==='group:ga','did not recover');close();});
   await run('长列表和窄屏不溢出、正文区可滚动',async()=>{stores.ga=Array.from({length:45},(_,i)=>({id:'long'+i,title:'长记忆标题用于窄屏检查'+i,content:'保留完整正文并允许滚动查看。'.repeat(8)}));await open();const rect=document.querySelector('[role=dialog]').getBoundingClientRect();const body=document.querySelector('.km-body');check(rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight,'dialog overflow');check(body.scrollHeight>body.clientHeight,'not scrollable');check(document.querySelector('[role=dialog]').scrollWidth<=document.querySelector('[role=dialog]').clientWidth,'horizontal overflow');close();stores.ga=structuredClone(initial);});
-  await run('卸载移除自己的入口、确认框和项目订阅，保留宿主节点',async()=>{await open();document.querySelector('.km-delete').click();check(document.querySelector('[role=alertdialog]'),'missing pending confirmation');uninstall();check(!document.querySelector('.knowstack-memory-entry,[role=dialog],[role=alertdialog]'),'unload residue');check(panelListeners.size===0,'context subscription leaked');check(document.getElementById('host-action'),'host removed');uninstall=installMemoryEntry(pi,access,document,{connectContext});await open();});
+  await run('卸载移除自己的入口、确认框和项目订阅，保留宿主节点',async()=>{await open();document.querySelector('.km-delete').click();check(document.querySelector('[role=alertdialog]'),'missing pending confirmation');uninstall();check(!document.querySelector('.knowstack-memory-entry,[role=dialog],[role=alertdialog]'),'unload residue');check(activeContexts.size===0,'context subscription leaked');check(document.getElementById('host-action'),'host removed');uninstall=installMemoryEntry(pi,access,document,{connectContext});await open();});
   await run('无法识别宿主面板时明确报错，不读取任意项目',async()=>{close();uninstall();uninstall=installMemoryEntry(pi,access,document,{connectContext:async()=>{throw Error('incompatible host');}});await open();check(document.querySelectorAll('.km-item').length===0,'fallback memory read');check(document.querySelector('.km-error').textContent.includes('无法识别'),'missing compatibility error');close();uninstall();uninstall=installMemoryEntry(pi,access,document,{connectContext});await open();});
   check(prompts.length===0,'native dialog called during memory interaction');
   const result={passed:passed.length,failed:0,tests:passed};document.getElementById('results').textContent=JSON.stringify(result,null,2);return result;

@@ -193,3 +193,38 @@ test('switch during dispatched save never redirects payload; clean editor then f
   assert.equal(r.writes().length, 1); assert.equal(r.writes()[0].input.groupId, 'ga'); assert.deepEqual(r.stores.gb, []);
   assert.equal(r.stores.ga[0].content, '只存旧项目'); assert.equal(r.controller.getState().projectKey, 'group:gb');
 });
+
+test('DOM session resolver returns identity only, limits message payload and rejects invalid/remote sessions', async t => {
+  const r = await rig(t, { session: id => ({ id, projectPath: 'D:/a', messages: ['PRIVATE'] }) });
+  assert.deepEqual(await r.access.resolveSession('sa'), { sessionId: 'sa', projectPath: 'd:/a' });
+  assert.deepEqual(r.calls[0], { key: 'sessionGet', input: { id: 'sa', messageLimit: 1, contentLimit: 1 } });
+  await assert.rejects(r.access.resolveSession('../invalid'), /PANEL_CONTEXT_UNAVAILABLE/); assert.equal(r.calls.length, 1);
+  for (const session of [() => null, id => ({ id, source: 'remote', projectPath: 'D:/a' }), id => ({ id })]) {
+    const x = await rig(t, { session }); await assert.rejects(x.access.resolveSession('sa'));
+  }
+});
+test('DOM context connects to native editor; A-B-A during save invalidates the old generation', async t => {
+  const { connectPanelContext } = await import('../renderer/panel-context.mjs');
+  const { createMemoryEditor } = await mod;
+  let id = 'sa', callback, saving = false, switched = false;
+  const doc = { documentElement: {}, querySelectorAll(selector) {
+    return selector.startsWith('[data-session-pane]') ? [{ getAttribute: () => id }] : [];
+  }, addEventListener() {}, removeEventListener() {}, defaultView: {
+    MutationObserver: class { constructor(fn) { callback = fn; } observe() {} disconnect() {} },
+    addEventListener() {}, removeEventListener() {},
+  } };
+  const r = await rig(t, { session: value => ({ id: value, projectPath: value === 'sa' ? 'D:/a' : 'D:/b' }), hook({ key }) {
+    if (saving && !switched && key === 'projectGroupMemoryGet') {
+      switched = true; id = 'sb'; callback(); id = 'sa'; callback();
+    }
+  } });
+  const context = await connectPanelContext(doc, { resolveSession: r.access.resolveSession });
+  const controller = createMemoryEditor(r.access, { context }); t.after(() => { controller.stop(); context.stop(); });
+  await controller.load(); await settled(controller);
+  assert.equal(controller.getState().projectKey, 'group:ga'); assert.deepEqual(controller.getState().entries, [old]);
+  controller.update('old', 'content', '保留草稿'); saving = true; await controller.save(); await settled(controller);
+  assert.equal(r.writes().length, 0); assert.equal(controller.getState().needsRefresh, true);
+  assert.equal(controller.getState().entries[0].content, '保留草稿');
+  await controller.load(); controller.update('old', 'content', '重新读取后保存'); await controller.save();
+  assert.equal(r.writes().length, 1); assert.equal(r.stores.ga[0].content, '重新读取后保存');
+});

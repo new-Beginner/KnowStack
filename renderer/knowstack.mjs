@@ -5,7 +5,7 @@ import { createProjectController } from './project-controls.mjs';
 import { installSettingsEntry, SETTINGS_CSS } from './settings-ui.mjs';
 import { createMemoryAccess } from './memory-editor.mjs';
 import { installMemoryEntry, MEMORY_CSS } from './memory-ui.mjs';
-const VERSION = '0.4.3';
+const VERSION = '0.4.4';
 const h = React.createElement;
 let runtime;
 

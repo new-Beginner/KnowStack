@@ -1,64 +1,103 @@
 import { normalizePath } from './native-memory.mjs';
 
 const fail = code => Object.assign(new Error(code), { code });
-const localPath = path => typeof path === 'string' && (/^[a-z]:[\\/]/i.test(path) || path.startsWith('/')) && !path.startsWith('//');
-
-// Read only the same window-local store used by the host WorkPanel. Never use workspace.get:
-// that sidecar workspace is shared and may belong to a different window.
-export function panelSelection(state) {
-  if (!state || !Array.isArray(state.sessions)) throw fail('PANEL_CONTEXT_UNAVAILABLE');
-  if (state.selectingSessionId) throw fail('PANEL_CONTEXT_CHANGING');
-  const sessionId = state.activeSessionId;
-  if (sessionId != null && sessionId !== '' && typeof sessionId !== 'string') throw fail('PANEL_CONTEXT_UNAVAILABLE');
-  const session = sessionId ? state.sessions.find(item => item?.id === sessionId) : null;
-  if (sessionId && !session) throw fail('PANEL_CONTEXT_CHANGING');
-  const path = session ? session.projectPath : state.activeProjectPath;
-  if (session?.source === 'remote' || session?.remoteHostKey || session?.remoteWorkspace ||
-      (typeof path === 'string' && path.startsWith('remote-project:'))) throw fail('REMOTE_PROJECT');
+const ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
+const localPath = path => typeof path === 'string' && (/^[a-z]:[\\/]/i.test(path) || path.startsWith('/')) &&
+  !/^[\\/]{2}/.test(path) && !/[\x00-\x1f]/.test(path);
+const checkedPath = path => {
+  if (typeof path === 'string' && path.startsWith('remote-project:')) throw fail('REMOTE_PROJECT');
   if (!path) throw fail('NO_PANEL_PROJECT');
   if (!localPath(path)) throw fail('PANEL_CONTEXT_UNAVAILABLE');
-  if (session && state.activeProjectPath && normalizePath(state.activeProjectPath) !== normalizePath(path)) throw fail('PANEL_CONTEXT_CHANGING');
-  return { projectPath: normalizePath(path), sessionId: sessionId || null };
+  return normalizePath(path);
+};
+function unique(nodes, attribute) {
+  const values = new Set([...nodes].map(node => node.getAttribute(attribute)));
+  if (values.size !== 1) throw fail('PANEL_CONTEXT_UNAVAILABLE');
+  return [...values][0];
 }
 
-export function contextFromStore(store) {
-  if (typeof store?.getState !== 'function' || typeof store?.subscribe !== 'function') throw fail('PANEL_CONTEXT_UNAVAILABLE');
-  const get = () => panelSelection(store.getState());
-  const stamp = () => { try { return JSON.stringify(get()); } catch (error) { return error.code || 'PANEL_CONTEXT_UNAVAILABLE'; } };
-  return {
-    get,
-    subscribe(listener) {
-      let previous = stamp();
-      return store.subscribe(() => {
-        const next = stamp();
-        if (next !== previous) { previous = next; listener(); }
+// Window-local identity attributes only. No transcript, draft, host module or state extraction.
+// These DOM markers are an internal compatibility boundary, not a stable public SDK.
+export function readPanelIdentity(doc = document) {
+  const panes = doc.querySelectorAll('[data-session-pane][data-visible="true"]');
+  const rows = panes.length ? panes : doc.querySelectorAll('.thread-item.active[data-sidebar-session-row]');
+  if (rows.length) {
+    const sessionId = unique(rows, panes.length ? 'data-session-pane' : 'data-sidebar-session-row');
+    if (!ID.test(sessionId || '') || sessionId.includes('..')) throw fail('PANEL_CONTEXT_UNAVAILABLE');
+    return { sessionId, projectPath: null };
+  }
+  const projects = doc.querySelectorAll('[data-sidebar-project-group][data-current-workspace="true"]');
+  if (projects.length) return { sessionId: null, projectPath: checkedPath(unique(projects, 'data-sidebar-project-group')) };
+  if (!doc.querySelector('.session-panes, [data-testid="home-empty"], .sidebar')) throw fail('PANEL_CONTEXT_UNAVAILABLE');
+  throw fail('NO_PANEL_PROJECT');
+}
+
+export async function connectPanelContext(doc = document, { resolveSession } = {}) {
+  if (!doc?.documentElement || typeof doc.defaultView?.MutationObserver !== 'function') throw fail('PANEL_CONTEXT_UNAVAILABLE');
+  const listeners = new Set(), waiters = new Set();
+  let stopped = false, version = 0, desiredKey = null, selection = null, errorCode = 'PANEL_CONTEXT_CHANGING';
+  const wake = () => { for (const resolve of waiters) resolve(); waiters.clear(); };
+  const notify = () => { if (!stopped) { wake(); for (const listener of listeners) listener(); } };
+  const sync = (retry = false) => {
+    if (stopped) return;
+    let identity, code = '';
+    try { identity = readPanelIdentity(doc); } catch (error) { code = error.code || 'PANEL_CONTEXT_UNAVAILABLE'; }
+    const key = code || JSON.stringify(identity);
+    if (key === desiredKey && !(retry && identity?.sessionId && errorCode !== 'PANEL_CONTEXT_CHANGING' && !selection)) return;
+    desiredKey = key; const generation = ++version; selection = null;
+    errorCode = code || 'PANEL_CONTEXT_CHANGING';
+    if (identity && !identity.sessionId) {
+      selection = Object.freeze({ ...identity, contextVersion: generation }); errorCode = '';
+    } else if (identity) {
+      // The injected resolver uses the same fixed sessionGet channel as save-time ownership checks.
+      void Promise.resolve().then(async () => {
+        if (stopped || generation !== version) return;
+        if (typeof resolveSession !== 'function') throw fail('PANEL_CONTEXT_UNAVAILABLE');
+        const resolved = await resolveSession(identity.sessionId);
+        if (stopped) return;
+        sync(); // Re-read before accepting an asynchronous response, even if observer delivery is delayed.
+        if (generation !== version) return;
+        if (resolved?.sessionId !== identity.sessionId) throw fail('PANEL_CONTEXT_UNAVAILABLE');
+        const projectPath = checkedPath(resolved.projectPath);
+        selection = Object.freeze({ sessionId: identity.sessionId, projectPath, contextVersion: generation });
+        errorCode = ''; notify();
+      }).catch(error => {
+        if (stopped) return;
+        sync();
+        if (generation !== version) return;
+        errorCode = ['REMOTE_PROJECT', 'NO_PANEL_PROJECT'].includes(error.code) ? error.code : 'PANEL_CONTEXT_UNAVAILABLE';
+        notify();
       });
+    }
+    notify();
+  };
+  const observer = new doc.defaultView.MutationObserver(() => sync());
+  observer.observe(doc.documentElement, { subtree: true, childList: true, attributes: true,
+    attributeFilter: ['data-session-pane', 'data-visible', 'data-sidebar-session-row', 'class', 'data-sidebar-project-group', 'data-current-workspace'] });
+  const focus = () => sync(true);
+  const visible = () => { if (!doc.hidden) sync(true); };
+  doc.defaultView.addEventListener('focus', focus); doc.addEventListener('visibilitychange', visible);
+  sync();
+  return {
+    async ready() {
+      while (!stopped) {
+        sync();
+        if (selection) return selection;
+        if (errorCode !== 'PANEL_CONTEXT_CHANGING') throw fail(errorCode);
+        await new Promise(resolve => waiters.add(resolve));
+      }
+      throw fail('UNLOADED');
+    },
+    get() {
+      if (stopped) throw fail('UNLOADED');
+      sync();
+      if (!selection) throw fail(errorCode);
+      return selection;
+    },
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    stop() {
+      stopped = true; version++; wake(); listeners.clear(); observer.disconnect();
+      doc.defaultView.removeEventListener('focus', focus); doc.removeEventListener('visibilitychange', visible);
     },
   };
-}
-
-// Internal host adapter, deliberately restricted to the current document's already-loaded
-// local entry module. No guessed bundle hash/export name, store mutation or global IPC patching.
-export async function connectPanelContext(doc = document, importModule = url => import(url)) {
-  const page = new URL(doc.defaultView.location.href);
-  if (page.protocol !== 'file:') throw fail('PANEL_CONTEXT_UNAVAILABLE');
-  const scripts = [...doc.querySelectorAll('script[type="module"][src]')];
-  const entries = [...new Set(scripts.map(script => new URL(script.src, page).href))].filter(href => {
-    const url = new URL(href);
-    return url.protocol === page.protocol && url.host === page.host &&
-      url.pathname.startsWith(new URL('.', page).pathname) && /\/assets\/index-[\w-]+\.js$/.test(url.pathname) && !url.search && !url.hash;
-  });
-  if (entries.length !== 1) throw fail('PANEL_CONTEXT_UNAVAILABLE');
-  let module;
-  try { module = await importModule(entries[0]); } catch { throw fail('PANEL_CONTEXT_UNAVAILABLE'); }
-  const candidates = [...new Set(Object.values(module))].filter(value => {
-    if (typeof value?.getState !== 'function' || typeof value?.subscribe !== 'function') return false;
-    try {
-      const state = value.getState();
-      return state && Object.hasOwn(state, 'activeSessionId') && Object.hasOwn(state, 'activeProjectPath') &&
-        Array.isArray(state.sessions) && Array.isArray(state.workPanelTabs);
-    } catch { return false; }
-  });
-  if (candidates.length !== 1) throw fail('PANEL_CONTEXT_UNAVAILABLE');
-  return contextFromStore(candidates[0]);
 }

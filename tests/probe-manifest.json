@@ -3,7 +3,7 @@
   "id": "local.project-memory-api-probe",
   "name": "Project Memory API Probe",
   "version": "0.1.4",
-  "main": "main.js",
+  "main": "legacy-probe-main.js",
   "permissions": ["agent.tool.register", "desktop.control", "renderer.extension"],
   "renderer": "renderer/probe.mjs",
   "rendererActions": ["plugin.call"],

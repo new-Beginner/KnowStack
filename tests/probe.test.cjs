@@ -8,8 +8,8 @@ const { createRequire } = require("node:module");
 const { pathToFileURL } = require("node:url");
 const { test } = require("node:test");
 const root = path.join(__dirname, "..");
-const source = fs.readFileSync(path.join(root, "main.js"), "utf8");
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'tests/probe-manifest.json'), 'utf8'));
+const source = fs.readFileSync(path.join(root, manifest.main), "utf8");
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
 async function load(desktop) {
@@ -20,7 +20,7 @@ async function load(desktop) {
   let invoked = 0;
   const sandbox = {
     module: { exports: {} },
-    require: name => name === './manifest.json' ? manifest : createRequire(path.join(root, 'main.js'))(name),
+    require: name => name === './manifest.json' ? manifest : createRequire(path.join(root, manifest.main))(name),
     pi: {
       app: { getVersion: async () => "0.0.0-test" },
       workspace: { get: async () => ({ path: "D:/project" }) },
@@ -34,7 +34,7 @@ async function load(desktop) {
       },
     },
   };
-  vm.runInNewContext(source, sandbox, { filename: "main.js" });
+  vm.runInNewContext(source, sandbox, { filename: manifest.main });
   await sandbox.module.exports.onLoad();
   return { tool, tools, removals, unload: sandbox.module.exports.onUnload,
     reload: sandbox.module.exports.onLoad,
@@ -43,7 +43,7 @@ async function load(desktop) {
 }
 
 test("manifest declares only diagnostic permissions and complete locales", () => {
-  assert.equal(manifest.main, "main.js");
+  assert.equal(manifest.main, "legacy-probe-main.js");
   assert.equal(manifest.version, "0.1.4");
   assert.deepEqual(manifest.permissions, ["agent.tool.register", "desktop.control", "renderer.extension"]);
   assert.equal(manifest.renderer, "renderer/probe.mjs");

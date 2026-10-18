@@ -1,14 +1,16 @@
-# 知栈 · KnowStack 0.4.3
+# 知栈 · KnowStack 0.4.4
 
 把经过验证、尚未被已有记忆覆盖的项目经验，精简追加到 **PI-Desktop 原生项目记忆**。只用一套记忆，不调用 Jev，不自动改写或删除旧条目。
 
 > **默认开启自动保存。** 安装授权后，Agent 提出的合格新记忆可直接写入，不逐条询问。可以关闭本项目自动保存，改为工具卡人工确认。原生记忆写入仍使用内部 Renderer IPC，底层整表保存不是原子操作；执行保存时不要同时手动修改记忆或重载插件。官方插件仓库兼容审核未确认。
 >
 > **升级注意：** 从 0.1.x 升级新增 `agent.extension` 权限，需要显式重新加载并授权。0.2.1 移除了误用的 `session.read`，不新增权限。请停用独立的 `axc00.project-knowledge`（原“项目知识库”）插件，避免它继续注入旧指引或写入 `.workflow/`。
+>
+> **0.4.4 上架兼容修复：** 正式入口统一为 `main.js`；项目跟随改用当前窗口的只读 DOM 身份标记，不再动态加载宿主入口模块。保留无聊天项目、窗口隔离、草稿保护及保存前归属复核；自动／人工记忆保存和手动编辑未移除。DOM 与原生记忆内部 IPC 仍属兼容边界，不代表商店已批准。旧 `v0.4.3` 标签和安装包不改写，详见 [0.4.4 验证说明](docs/verification-0.4.4.md)。
 
 ## 开始使用
 
-1. 加载当前项目根目录，或安装 `dist/local.project-memory-api-probe-0.4.3.piplug`。
+1. 加载当前项目根目录，或安装 `dist/local.project-memory-api-probe-0.4.4.piplug`。
 2. 授予清单中的权限；升级后的新权限不能仅靠热重载自动获得。
 3. 开始一个 Agent 会话，或重启已有会话的 Agent，使新的扩展指引生效。工具目录也可能需要下一轮消息刷新。
 4. 正常完成任务。没有新知识时不会为了凑数生成记忆；出现可复用的新结论时，Agent 先读当前原生记忆，再去重提炼和提交。
@@ -29,9 +31,9 @@
 
 **0.4.3 输入焦点修复：** 删除记忆和放弃草稿改用编辑器内确认，不再打开系统 `window.confirm()`，避免系统模态框影响聊天输入焦点。确认框默认聚焦“取消”，支持 Esc 取消；确认删除仍只是修改草稿，保存后才生效。如果旧版聊天框暂时无法输入，可先切换侧边栏内容恢复，再安装新版。真实宿主修复效果尚待安装验收，详见 [验证记录](docs/verification-0.4.3.md)。
 
-手动编辑仅来自用户点击，不开放给 Agent 的 `remember` 工具；Agent 仍只追加、不改删旧记忆。没有新增权限、第二套知识库或宿主源码修改。为复用现有 Renderer 记忆接口和弹窗，本版在 `.work-panel-launcher-list` 中添加独立入口，复用宿主列表样式，不注册独立的 `contributes.views` 页面。项目来源通过当前文档已加载入口模块中的窗口独立状态仓库只读获取，不使用跨窗口共享的 `workspace.get`；这是内部适配，宿主 DOM 或模块导出变化后可能需要更新，识别失败会停止读写。
+手动编辑仅来自用户点击，不开放给 Agent 的 `remember` 工具；Agent 仍只追加、不改删旧记忆。没有新增权限、第二套知识库或宿主源码修改。为复用现有 Renderer 记忆接口和弹窗，本版在 `.work-panel-launcher-list` 中添加独立入口，复用宿主列表样式，不注册独立的 `contributes.views` 页面。项目来源只读取当前文档的会话／当前项目身份属性；有会话时通过受限 `sessionGet` 解析所属项目，无聊天时使用唯一当前项目标记。不读取聊天正文或草稿，不使用跨窗口共享工作区，不加载宿主模块或提取内部状态仓库；宿主 DOM 变化后可能需要更新，识别失败会停止读写。
 
-界面示例（模拟数据）：[右侧入口](docs/launcher-0.4.3.png) · [记忆界面](docs/memory-0.4.3.png) · [窄屏](docs/memory-0.4.3-narrow.png) · [页内删除确认](docs/confirmation-0.4.3.png)。当前面板跟随机制与宿主兼容边界见 [0.4.2 验证说明](docs/verification-0.4.2.md)。
+界面示例（模拟数据）：[右侧入口](docs/launcher-0.4.3.png) · [记忆界面](docs/memory-0.4.3.png) · [窄屏](docs/memory-0.4.3-narrow.png) · [页内删除确认](docs/confirmation-0.4.3.png)。当前面板跟随机制与宿主兼容边界见 [0.4.4 验证说明](docs/verification-0.4.4.md)。
 
 ## 切换自动或人工保存
 
@@ -116,7 +118,7 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `knowstack-main.js` | 正式插件入口，注册工具与 Renderer 回调 |
+| `main.js` | 正式插件入口，注册工具与 Renderer 回调 |
 | `memory-service.js` | 会话凭证、项目开关、保存队列、人工确认状态 |
 | `renderer/native-memory.mjs` | 固定 IPC，项目组核验、去重、只追加与回读 |
 | `renderer/knowstack.mjs` | Renderer 工作循环、工具卡和项目开关 |
@@ -128,14 +130,14 @@
 | `renderer/panel-context.mjs` | 当前窗口项目只读适配、自动变化订阅与上下文隔离 |
 | `knowstack-extension.js` | Agent 收尾指引和已验证的保存回执 |
 
-`project-knowledge-source/` 及旧 `main.js`、`memory-jobs.js`、`renderer/probe.mjs`、`renderer/memory-test.mjs` 为保留的参考／诊断代码，**不由当前 manifest 加载**。旧诊断测试固定使用 `tests/probe-manifest.json`。历史说明见 [0.1.x 归档](docs/legacy-probe.md)，不会自动迁移或删除旧 `.workflow/` 文件。
+`project-knowledge-source/` 及 `legacy-probe-main.js`、`memory-jobs.js`、`renderer/probe.mjs`、`renderer/memory-test.mjs` 为保留的参考／诊断代码，**不由当前 manifest 加载**。旧诊断测试固定使用 `tests/probe-manifest.json`。历史说明见 [0.1.x 归档](docs/legacy-probe.md)，不会自动迁移或删除旧 `.workflow/` 文件。
 
 ## 检查与打包
 
 需要 Node.js 22 或更高版本，无第三方依赖。以下命令从项目根目录运行：
 
 ```bash
-node --check knowstack-main.js
+node --check main.js
 node --check memory-service.js
 node --check project-settings.js
 node --check renderer/project-controls.mjs
@@ -151,7 +153,7 @@ node --test tests/*.test.cjs
 node tests/memory-input-cdp.cjs
 ```
 
-然后使用 PI-Desktop 的 `PluginCheck(directory=".")` 与 `PluginPack(directory=".")`，生成 `dist/local.project-memory-api-probe-0.4.3.piplug`。不要手工压缩安装包。`memory-input-cdp.cjs` 需要本机 Chrome，可通过 `CHROME_PATH` 指定可执行文件；仅操作模拟数据，覆盖删除后返回聊天框的可信输入与退格。
+然后使用 PI-Desktop 的 `PluginCheck(directory=".")` 与 `PluginPack(directory=".")`，生成 `dist/local.project-memory-api-probe-0.4.4.piplug`。不要手工压缩安装包。`memory-input-cdp.cjs` 需要本机 Chrome，可通过 `CHROME_PATH` 指定可执行文件；仅操作模拟数据，覆盖删除后返回聊天框的可信输入与退格。
 
 0.3.0 的新增功能已用 Node 回归和真实 Chrome DOM（模拟项目数据）检查，涵盖自动同步、失败保护、设置入口、键盘操作、窄屏及长列表；未以真实项目的新增／删除验证本版，也未重新做真实记忆写入验收。复现步骤与证据见 [0.3.0 验证说明](docs/verification-0.3.0.md)。
 
@@ -159,4 +161,4 @@ node tests/memory-input-cdp.cjs
 
 此前 0.2.2 在运行中的 PI-Desktop 实测了读取、自动保存、未确认不入库、用户点击后的人工保存、独立回读，以及重新加载后的项目模式与记忆保留。停在插件页时曾发生 `BRIDGE_TIMEOUT`，回到当前聊天后恢复；暂不承诺后台任意页面均可用。详见 [0.2.2 实机记录](docs/real-test-0.2.2.md)，不能用模拟测试代替未覆盖项。
 
-更多内容：[需求与实现说明](KnowStack-合并需求说明.md) · [版本记录](CHANGELOG.md)
+更多内容：[需求与实现说明](KnowStack-requirements.md) · [版本记录](CHANGELOG.md)

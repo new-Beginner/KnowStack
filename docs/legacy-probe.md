@@ -70,7 +70,7 @@ Success is reported as `status: "passed"`, `cleanup: "retained_by_request"`, and
 Requires Node.js 22 or later; no dependencies. Historical source checks, run from the repository root:
 
 ```bash
-node --check main.js
+node --check legacy-probe-main.js
 node --check memory-jobs.js
 node --check renderer/probe.mjs
 node --check renderer/memory-test.mjs

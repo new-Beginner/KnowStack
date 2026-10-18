@@ -156,12 +156,12 @@ export function installMemoryEntry(pi, access, doc = document, { connectContext 
     if (opened || stopped || opening) return;
     opening = true;
     let context;
-    try { context = await connectContext(doc); }
+    try { context = await connectContext(doc, { resolveSession: id => access.resolveSession(id) }); }
     catch { context = { get() { throw Object.assign(new Error('PANEL_CONTEXT_UNAVAILABLE'), { code: 'PANEL_CONTEXT_UNAVAILABLE' }); }, subscribe: () => () => {} }; }
     opening = false;
-    if (stopped) return;
+    if (stopped) { context.stop?.(); return; }
     const controller = createMemoryEditor(access, { context }); const layer = pi.ui.openLayer(); let dispose;
-    const cleanup = () => { dispose?.(); controller.stop(); layer.close(); opened = null; };
+    const cleanup = () => { dispose?.(); controller.stop(); context.stop?.(); layer.close(); opened = null; };
     try { dispose = mountMemoryEditor(layer.element, controller, cleanup, doc); }
     catch (error) { cleanup(); throw error; }
     opened = cleanup; void controller.load();

@@ -77,6 +77,15 @@ export function createMemoryAccess(bridge) {
   };
   return {
     run, projects: () => run(projects),
+    resolveSession: sessionId => run(async () => {
+      if (typeof sessionId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(sessionId) || sessionId.includes('..')) throw fail('PANEL_CONTEXT_UNAVAILABLE');
+      const value = await call('sessionGet', { id: sessionId, messageLimit: 1, contentLimit: 1 });
+      const session = value?.session;
+      if (!session || session.id !== sessionId) throw fail('PANEL_CONTEXT_UNAVAILABLE');
+      if (session.source === 'remote' || session.remoteHostKey || session.remoteWorkspace || session.projectPath?.startsWith('remote-project:')) throw fail('REMOTE_PROJECT');
+      if (!session.projectPath) throw fail('NO_PANEL_PROJECT');
+      return { sessionId, projectPath: normalizePath(session.projectPath) };
+    }),
     current: selection => run(async () => {
       await verifySelection(selection);
       const all = await projects();
@@ -134,13 +143,17 @@ export function createMemoryEditor(access, { context } = {}) {
   const publish = patch => { if (stopped) return; state = { ...state, ...patch }; for (const listener of listeners) listener(state); };
   const isCurrent = selected => {
     if (!context) return true;
-    try { return !!selected && context.get().projectPath === selected.projectPath; } catch { return false; }
+    try {
+      const current = context.get();
+      return !!selected && current.projectPath === selected.projectPath &&
+        (selected.contextVersion === undefined || current.contextVersion === selected.contextVersion);
+    } catch { return false; }
   };
   const load = async key => {
     if (stopped || state.busy) return;
     publish({ busy: true, error: '', message: '' });
     try {
-      const selected = context?.get();
+      const selected = context ? await (context.ready ? context.ready() : context.get()) : undefined;
       const current = context ? await access.current(selected) : null;
       const projects = current?.projects ?? await access.projects();
       const target = current?.project ?? projects.find(p => p.key === key) ?? (!context && !key ? projects[0] : null);

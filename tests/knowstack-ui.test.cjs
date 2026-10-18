@@ -113,8 +113,8 @@ test('memory HTML remains text; no raw HTML injection API is used',async()=>{
 });
 test('new main registers only formal tools and forwards trusted context',async()=>{
   const registered=[];const removed=[];const events=[];let stopped=0;
-  const source=fs.readFileSync(path.join(root,'knowstack-main.js'),'utf8');
-  const realRequire=createRequire(path.join(root,'knowstack-main.js'));
+  const source=fs.readFileSync(path.join(root,manifest.main),'utf8');
+  const realRequire=createRequire(path.join(root,manifest.main));
   const fakeService={stop(){stopped++;},read(args,ctx){events.push({kind:'read',args,ctx});return{status:'read'};},remember(args,ctx){events.push({kind:'remember',args,ctx});return{status:'skipped'};},renderer(method,args){return{method,args};}};
   const sandbox={module:{exports:{}},require:name=>name==='./memory-service.js'?{createService:()=>fakeService}:realRequire(name),pi:{agent:{registerTool:async x=>registered.push(x),unregisterTool:async name=>removed.push(name)}}};
   vm.runInNewContext(source,sandbox);await sandbox.module.exports.onLoad();
