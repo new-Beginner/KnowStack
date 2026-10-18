@@ -1,4 +1,4 @@
-# 知栈 · KnowStack 0.4.1
+# 知栈 · KnowStack 0.4.3
 
 把经过验证、尚未被已有记忆覆盖的项目经验，精简追加到 **PI-Desktop 原生项目记忆**。只用一套记忆，不调用 Jev，不自动改写或删除旧条目。
 
@@ -8,7 +8,7 @@
 
 ## 开始使用
 
-1. 加载当前项目根目录，或安装 `dist/local.project-memory-api-probe-0.4.1.piplug`。
+1. 加载当前项目根目录，或安装 `dist/local.project-memory-api-probe-0.4.3.piplug`。
 2. 授予清单中的权限；升级后的新权限不能仅靠热重载自动获得。
 3. 开始一个 Agent 会话，或重启已有会话的 Agent，使新的扩展指引生效。工具目录也可能需要下一轮消息刷新。
 4. 正常完成任务。没有新知识时不会为了凑数生成记忆；出现可复用的新结论时，Agent 先读当前原生记忆，再去重提炼和提交。
@@ -21,14 +21,17 @@
 ## 在右侧工作面板管理记忆
 
 1. 打开右侧工作面板的 **新建（＋）** 功能列表，点击 **项目记忆**。左侧聊天栏不再显示书本入口；打开后的记忆管理弹窗保持原样。
-2. 在顶部选择项目，核对项目名与路径。默认显示按名称排序的首个本地项目；远程项目不显示。多文件夹项目共用一份原生记忆。
+2. 自动显示**打开入口所在面板／窗口的当前项目**，顶部项目栏只读，核对项目名与路径即可。无草稿时随该窗口项目变化自动读取；不同窗口互不借用项目。多文件夹项目共用一份原生记忆。
 3. 直接编辑标题和正文，或点击 **添加记忆**。删除需要确认，但只是从草稿移除。
-4. 点击 **保存记忆**，新增、修改、删除才写入原生记忆；成功后显示“回读验证成功”。正文不能为空，标题可选。点击取消、关闭或切换项目时，若有未保存修改会询问是否放弃。
-5. **重新读取** 会加载最新原生记忆；有草稿时先确认放弃。保存冲突、项目移除或归属变化会停止写入并保留草稿；结果不确定时先重新读取核对，切勿盲目重复提交。
+4. 点击 **保存记忆**，新增、修改、删除才写入原生记忆；成功后显示“回读验证成功”。正文不能为空，标题可选。取消或关闭时，未保存修改需要确认放弃。
+5. 有草稿时切换窗口内的项目，会保留旧项目草稿、显示警告并禁用保存；点击 **重新读取** 并确认放弃后，才读取当前项目。保存冲突或归属变化同样保留草稿；结果不确定时先重新读取核对，切勿盲目重复提交。
+6. 没有本地项目、当前为远程项目或无法识别窗口上下文时，不显示其他项目的记忆，也不回退到首个项目。打开本地项目后再试；宿主兼容性错误需要更新适配。
 
-手动编辑仅来自用户点击，不开放给 Agent 的 `remember` 工具；Agent 仍只追加、不改删旧记忆。没有新增权限、第二套知识库或宿主源码修改。为复用现有 Renderer 记忆接口和弹窗，本版在 `.work-panel-launcher-list` 中添加独立入口，复用宿主列表样式，不注册独立的 `contributes.views` 页面；宿主 DOM 变化后可能需要更新。
+**0.4.3 输入焦点修复：** 删除记忆和放弃草稿改用编辑器内确认，不再打开系统 `window.confirm()`，避免系统模态框影响聊天输入焦点。确认框默认聚焦“取消”，支持 Esc 取消；确认删除仍只是修改草稿，保存后才生效。如果旧版聊天框暂时无法输入，可先切换侧边栏内容恢复，再安装新版。真实宿主修复效果尚待安装验收，详见 [验证记录](docs/verification-0.4.3.md)。
 
-界面示例（模拟数据）：[右侧入口](docs/launcher-0.4.1.png) · [记忆界面](docs/memory-0.4.1.png) · [窄屏](docs/memory-0.4.1-narrow.png)。验证与尚未完成的宿主实机验收见 [0.4.1 验证说明](docs/verification-0.4.1.md)。
+手动编辑仅来自用户点击，不开放给 Agent 的 `remember` 工具；Agent 仍只追加、不改删旧记忆。没有新增权限、第二套知识库或宿主源码修改。为复用现有 Renderer 记忆接口和弹窗，本版在 `.work-panel-launcher-list` 中添加独立入口，复用宿主列表样式，不注册独立的 `contributes.views` 页面。项目来源通过当前文档已加载入口模块中的窗口独立状态仓库只读获取，不使用跨窗口共享的 `workspace.get`；这是内部适配，宿主 DOM 或模块导出变化后可能需要更新，识别失败会停止读写。
+
+界面示例（模拟数据）：[右侧入口](docs/launcher-0.4.3.png) · [记忆界面](docs/memory-0.4.3.png) · [窄屏](docs/memory-0.4.3-narrow.png) · [页内删除确认](docs/confirmation-0.4.3.png)。当前面板跟随机制与宿主兼容边界见 [0.4.2 验证说明](docs/verification-0.4.2.md)。
 
 ## 切换自动或人工保存
 
@@ -122,6 +125,7 @@
 | `renderer/settings-ui.mjs` | 项目名＋开关弹窗、自身插件页设置入口适配 |
 | `renderer/memory-editor.mjs` | 手动记忆草稿、固定原生接口、整表快照检查与回读验证 |
 | `renderer/memory-ui.mjs` | 右侧新建列表入口、按项目读取和记忆增删改弹窗 |
+| `renderer/panel-context.mjs` | 当前窗口项目只读适配、自动变化订阅与上下文隔离 |
 | `knowstack-extension.js` | Agent 收尾指引和已验证的保存回执 |
 
 `project-knowledge-source/` 及旧 `main.js`、`memory-jobs.js`、`renderer/probe.mjs`、`renderer/memory-test.mjs` 为保留的参考／诊断代码，**不由当前 manifest 加载**。旧诊断测试固定使用 `tests/probe-manifest.json`。历史说明见 [0.1.x 归档](docs/legacy-probe.md)，不会自动迁移或删除旧 `.workflow/` 文件。
@@ -138,14 +142,16 @@ node --check renderer/project-controls.mjs
 node --check renderer/settings-ui.mjs
 node --check renderer/memory-editor.mjs
 node --check renderer/memory-ui.mjs
+node --check renderer/panel-context.mjs
 node --check knowstack-extension.js
 node --check renderer/native-memory.mjs
 node --check renderer/receipt-state.mjs
 node --check renderer/knowstack.mjs
 node --test tests/*.test.cjs
+node tests/memory-input-cdp.cjs
 ```
 
-然后使用 PI-Desktop 的 `PluginCheck(directory=".")` 与 `PluginPack(directory=".")`，生成 `dist/local.project-memory-api-probe-0.4.1.piplug`。不要手工压缩安装包。
+然后使用 PI-Desktop 的 `PluginCheck(directory=".")` 与 `PluginPack(directory=".")`，生成 `dist/local.project-memory-api-probe-0.4.3.piplug`。不要手工压缩安装包。`memory-input-cdp.cjs` 需要本机 Chrome，可通过 `CHROME_PATH` 指定可执行文件；仅操作模拟数据，覆盖删除后返回聊天框的可信输入与退格。
 
 0.3.0 的新增功能已用 Node 回归和真实 Chrome DOM（模拟项目数据）检查，涵盖自动同步、失败保护、设置入口、键盘操作、窄屏及长列表；未以真实项目的新增／删除验证本版，也未重新做真实记忆写入验收。复现步骤与证据见 [0.3.0 验证说明](docs/verification-0.3.0.md)。
 

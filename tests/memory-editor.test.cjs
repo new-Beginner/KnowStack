@@ -8,11 +8,12 @@ async function rig(t, options = {}) {
   const { createMemoryAccess, createMemoryEditor } = await mod;
   let groups = [{ id: 'ga', name: 'A 项目', roots: [{ path: 'D:/a' }] }, { id: 'gb', name: 'B 项目', roots: [{ path: 'D:/b' }] }];
   const stores = { ga: [clone(old)], gb: [] }; const calls = []; let revision = 0;
-  const keys = ['projectGroupList', 'projectGroupMemoryGet', 'projectGroupMemorySave', 'projectMemoryGet', 'projectMemorySave'];
+  const keys = ['sessionGet', 'projectGroupList', 'projectGroupMemoryGet', 'projectGroupMemorySave', 'projectMemoryGet', 'projectMemorySave'];
   const bridge = { channels: { invoke: Object.fromEntries(keys.map(key => [key, key])) }, async invoke(key, input) {
     calls.push({ key, input: clone(input) });
     await options.hook?.({ key, input, stores, groups, calls });
     if (key === 'projectGroupList') return { ok: true, data: { groups: clone(groups) } };
+    if (key === 'sessionGet') return { ok: true, data: { session: options.session ? options.session(input.id) : { id: input.id, projectPath: options.context?.get().projectPath } } };
     const id = input.groupId ?? (input.projectPath === 'd:/a' ? 'ga' : 'gb');
     if (key.endsWith('Save')) { stores[id] = clone(input.entries); revision++; if (options.lostResponse) throw Error('PRIVATE_SECRET'); }
     const entries = clone(stores[id]);
@@ -21,7 +22,7 @@ async function rig(t, options = {}) {
     if (options.mismatch && revision) memory.entries = [];
     return { ok: true, data: { memory } };
   } };
-  const access = createMemoryAccess(bridge); const controller = createMemoryEditor(access);
+  const access = createMemoryAccess(bridge); const controller = createMemoryEditor(access, { context: options.context });
   t.after(() => { controller.stop(); access.stop(); });
   return { access, controller, stores, calls, groups, setGroups(value) { groups = value; }, writes: () => calls.filter(c => c.key.endsWith('Save')) };
 }
@@ -109,4 +110,86 @@ test('double save is collapsed by busy state; edits are blocked while saving', a
   const r = await rig(t); await r.controller.load(); r.controller.update('old', 'content', '一次保存');
   const first = r.controller.save(); r.controller.remove('old'); await r.controller.save(); await first;
   assert.equal(r.writes().length, 1); assert.equal(r.stores.ga[0].content, '一次保存');
+});
+
+function panel(projectPath = 'd:/b', sessionId = null) {
+  let selected = { projectPath, sessionId }; let error = ''; const listeners = new Set();
+  return {
+    get() { if (error) throw Object.assign(Error(error), { code: error }); return selected; },
+    subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+    set(path, id = null) { selected = { projectPath: path, sessionId: id }; error = ''; for (const fn of listeners) fn(); },
+    fail(code) { error = code; for (const fn of listeners) fn(); },
+    count: () => listeners.size,
+  };
+}
+async function settled(controller) {
+  for (let i = 0; i < 200; i++) { await new Promise(resolve => setImmediate(resolve)); if (!controller.getState().busy) return; }
+  throw Error('controller did not settle');
+}
+test('panel opens its non-first project, validates session and ignores manual project choice', async t => {
+  const context = panel('d:/b', 'sb'); const r = await rig(t, { context }); await r.controller.load('group:ga');
+  assert.equal(r.controller.getState().projectKey, 'group:gb'); assert.deepEqual(r.controller.getState().entries, []);
+  assert.equal(r.controller.getState().following, true);
+  assert.deepEqual(r.calls.find(c => c.key === 'sessionGet').input, { id: 'sb', messageLimit: 1, contentLimit: 1 });
+  assert.equal(r.writes().length, 0);
+});
+test('panel root resolves the owning multi-root group, without needing an active session', async t => {
+  const context = panel('d:/second'); const r = await rig(t, { context }); r.groups[1].roots.push({ path: 'D:/second' });
+  await r.controller.load(); assert.equal(r.controller.getState().projectKey, 'group:gb');
+  assert.equal(r.calls.some(c => c.key === 'sessionGet'), false);
+});
+test('clean editor follows only its own window and releases its subscription on close', async t => {
+  const left = panel('d:/a'), right = panel('d:/b');
+  const a = await rig(t, { context: left }), b = await rig(t, { context: right });
+  await Promise.all([a.controller.load(), b.controller.load()]); left.set('d:/b'); await settled(a.controller);
+  assert.equal(a.controller.getState().projectKey, 'group:gb'); assert.equal(b.controller.getState().projectKey, 'group:gb');
+  right.set('d:/a'); await settled(b.controller);
+  assert.equal(a.controller.getState().projectKey, 'group:gb'); assert.equal(b.controller.getState().projectKey, 'group:ga');
+  assert.equal(left.count(), 1); a.controller.stop(); assert.equal(left.count(), 0);
+  left.set('d:/a'); assert.equal(a.controller.getState().projectKey, 'group:gb');
+});
+test('project change preserves dirty draft and blocks saving until explicit reread', async t => {
+  const context = panel('d:/a'); const r = await rig(t, { context }); await r.controller.load();
+  r.controller.update('old', 'content', '旧项目草稿'); context.set('d:/b'); await settled(r.controller);
+  assert.equal(r.controller.getState().entries[0].content, '旧项目草稿'); assert.equal(r.controller.getState().projectKey, 'group:ga');
+  assert.equal(r.controller.getState().needsRefresh, true); await r.controller.save(); assert.equal(r.writes().length, 0);
+  await r.controller.load(); assert.equal(r.controller.getState().projectKey, 'group:gb'); assert.deepEqual(r.controller.getState().entries, []);
+});
+test('unavailable, remote or unknown panel never falls back to first project', async t => {
+  for (const code of ['NO_PANEL_PROJECT', 'REMOTE_PROJECT', 'PANEL_CONTEXT_UNAVAILABLE', 'PANEL_CONTEXT_CHANGING']) {
+    const context = panel(); context.fail(code); const r = await rig(t, { context }); await r.controller.load();
+    assert.equal(r.controller.getState().loaded, false); assert.equal(r.calls.length, 0); assert.equal(r.controller.getState().projectKey, '');
+  }
+  const r = await rig(t, { context: panel('d:/unknown') }); await r.controller.load();
+  assert.equal(r.controller.getState().loaded, false); assert.equal(r.calls.some(c => c.key.endsWith('MemoryGet')), false);
+});
+test('moved or remote native session rejects a stale panel selection before memory access', async t => {
+  for (const session of [() => ({ id: 's', projectPath: 'd:/b' }), () => ({ id: 's', projectPath: 'd:/a', source: 'remote' }), () => null]) {
+    const r = await rig(t, { context: panel('d:/a', 's'), session }); await r.controller.load();
+    assert.equal(r.controller.getState().loaded, false); assert.equal(r.calls.length, 1); assert.equal(r.calls[0].key, 'sessionGet');
+  }
+});
+test('rapid changes during read discard stale result and follow the latest panel', async t => {
+  const context = panel('d:/a'); let switched = false;
+  const r = await rig(t, { context, hook({ key }) { if (!switched && key === 'projectGroupMemoryGet') { switched = true; context.set('d:/b'); } } });
+  await r.controller.load(); await settled(r.controller);
+  assert.equal(r.controller.getState().projectKey, 'group:gb'); assert.deepEqual(r.controller.getState().entries, []); assert.equal(r.writes().length, 0);
+});
+test('project switch in save preflight blocks the write and retains the original draft', async t => {
+  const context = panel('d:/a'); let saving = false;
+  const r = await rig(t, { context, hook({ key }) { if (saving && key === 'projectGroupMemoryGet') context.set('d:/b'); } });
+  await r.controller.load(); r.controller.update('old', 'content', '不准写错项目'); saving = true; await r.controller.save();
+  assert.equal(r.writes().length, 0); assert.equal(r.controller.getState().entries[0].content, '不准写错项目'); assert.equal(r.controller.getState().needsRefresh, true);
+});
+test('native session is revalidated immediately before saving', async t => {
+  const context = panel('d:/a', 's'); let checks = 0;
+  const r = await rig(t, { context, session: id => ({ id, projectPath: ++checks >= 3 ? 'd:/b' : 'd:/a' }) });
+  await r.controller.load(); r.controller.remove('old'); await r.controller.save(); assert.equal(checks, 3); assert.equal(r.writes().length, 0);
+});
+test('switch during dispatched save never redirects payload; clean editor then follows new project', async t => {
+  const context = panel('d:/a');
+  const r = await rig(t, { context, hook({ key }) { if (key === 'projectGroupMemorySave') context.set('d:/b'); } });
+  await r.controller.load(); r.controller.update('old', 'content', '只存旧项目'); await r.controller.save(); await settled(r.controller);
+  assert.equal(r.writes().length, 1); assert.equal(r.writes()[0].input.groupId, 'ga'); assert.deepEqual(r.stores.gb, []);
+  assert.equal(r.stores.ga[0].content, '只存旧项目'); assert.equal(r.controller.getState().projectKey, 'group:gb');
 });

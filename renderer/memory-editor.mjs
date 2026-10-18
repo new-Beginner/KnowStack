@@ -4,6 +4,11 @@ const fail = code => Object.assign(new Error(code), { code });
 const copy = entries => entries.map(({ id, title, content }) => ({ id, title, content }));
 export const MEMORY_ERRORS = {
   BRIDGE_UNAVAILABLE: '宿主记忆接口不可用，请检查插件连接。',
+  PANEL_CONTEXT_UNAVAILABLE: '无法识别此面板的当前项目，请检查宿主兼容性后重新读取。未选择其他项目。',
+  PANEL_CONTEXT_CHANGING: '面板正在切换会话或项目，请稍后重新读取。',
+  NO_PANEL_PROJECT: '此面板当前没有本地项目，请先打开一个项目。',
+  REMOTE_PROJECT: '此面板属于远程项目，本版不读写远程项目记忆。',
+  PANEL_CONTEXT_CHANGED: '面板项目已变化。旧项目草稿已保留；请重新读取当前项目后再编辑。',
   HOST_CALL_FAILED: '无法完成宿主操作，请检查连接后重新读取。',
   INVALID_PROJECT_LIST: '项目列表异常，未读取或修改记忆。',
   PROJECT_CHANGED: '项目已移除或文件夹归属已变化，请重新选择项目。',
@@ -49,7 +54,7 @@ export function createMemoryAccess(bridge) {
       const path = paths.includes(normalizePath(group.primaryPath)) ? normalizePath(group.primaryPath) : paths[0];
       const key = group.legacy === true ? `legacy:${path}` : `group:${group.id}`;
       if (result.some(project => project.key === key)) throw fail('INVALID_PROJECT_LIST');
-      result.push({ key, name: group.name?.trim() || path.split('/').at(-1) || path, path,
+      result.push({ key, name: group.name?.trim() || path.split('/').at(-1) || path, path, paths,
         binding: JSON.stringify([key, paths]), input: group.legacy === true ? { projectPath: path } : { groupId: group.id },
         get: group.legacy === true ? 'projectMemoryGet' : 'projectGroupMemoryGet',
         save: group.legacy === true ? 'projectMemorySave' : 'projectGroupMemorySave' });
@@ -61,20 +66,39 @@ export function createMemoryAccess(bridge) {
     if (!current || current.binding !== project.binding) throw fail('PROJECT_CHANGED');
     return current;
   };
+  const verifySelection = async selection => {
+    if (!normalizePath(selection?.projectPath)) throw fail('NO_PANEL_PROJECT');
+    if (selection.sessionId) {
+      const value = await call('sessionGet', { id: selection.sessionId, messageLimit: 1, contentLimit: 1 });
+      const session = value?.session;
+      if (!session || session.id !== selection.sessionId || session.source === 'remote' || session.remoteHostKey || session.remoteWorkspace ||
+          normalizePath(session.projectPath) !== normalizePath(selection.projectPath)) throw fail('PANEL_CONTEXT_CHANGED');
+    }
+  };
   return {
     run, projects: () => run(projects),
+    current: selection => run(async () => {
+      await verifySelection(selection);
+      const all = await projects();
+      const matches = all.filter(project => project.paths.includes(normalizePath(selection.projectPath)));
+      if (matches.length !== 1) throw fail('PROJECT_CHANGED');
+      return { projects: all, project: matches[0] };
+    }),
     read: project => run(async () => {
       const target = await resolve(project);
       const value = snapshot(await call(target.get, target.input));
       await resolve(target);
       return { project: target, ...value };
     }),
-    save: (basis, draft) => {
+    save: (basis, draft, options = {}) => {
       // Freeze the submitted payload before waiting on any other work.
       const entries = Array.isArray(draft) ? copy(draft) : null;
       return run(async () => {
         let attempted = false;
         try {
+          const guard = () => { if (options.isCurrent && !options.isCurrent()) throw fail('PANEL_CONTEXT_CHANGED'); };
+          guard();
+          if (options.selection) await verifySelection(options.selection);
           if (!entries || entries.length > 2000 || entries.some(e =>
             ['id', 'title', 'content'].some(key => typeof e[key] !== 'string') || !e.id.trim() || !e.content.trim() || /[\r\n]/.test(e.title)) ||
             new Set(entries.map(e => e.id)).size !== entries.length) throw fail('INVALID_ENTRIES');
@@ -86,6 +110,8 @@ export function createMemoryAccess(bridge) {
           await resolve(target);
           // Narrow the non-atomic whole-list save window with a second preflight read.
           if (snapshot(await call(target.get, target.input)).stamp !== basis.stamp) throw fail('STALE_BASIS');
+          if (options.selection) await verifySelection(options.selection);
+          guard();
           attempted = true;
           await call(target.save, { ...target.input, entries: clean });
           const after = snapshot(await call(target.get, target.input));
@@ -101,24 +127,45 @@ export function createMemoryAccess(bridge) {
   };
 }
 
-export function createMemoryEditor(access) {
-  let state = { projects: [], projectKey: '', entries: [], loaded: false, busy: false, dirty: false, needsRefresh: false, error: '', message: '' };
-  let basis = null; let stopped = false;
+export function createMemoryEditor(access, { context } = {}) {
+  let state = { projects: [], projectKey: '', entries: [], loaded: false, busy: false, dirty: false, needsRefresh: false, error: '', message: '', following: !!context };
+  let basis = null; let selection = null; let stopped = false; let pendingFollow = false;
   const listeners = new Set();
   const publish = patch => { if (stopped) return; state = { ...state, ...patch }; for (const listener of listeners) listener(state); };
+  const isCurrent = selected => {
+    if (!context) return true;
+    try { return !!selected && context.get().projectPath === selected.projectPath; } catch { return false; }
+  };
   const load = async key => {
     if (stopped || state.busy) return;
     publish({ busy: true, error: '', message: '' });
     try {
-      const projects = await access.projects();
-      const target = projects.find(p => p.key === key) ?? (!key ? projects[0] : null);
-      if (key && !target) throw fail('PROJECT_CHANGED');
+      const selected = context?.get();
+      const current = context ? await access.current(selected) : null;
+      const projects = current?.projects ?? await access.projects();
+      const target = current?.project ?? projects.find(p => p.key === key) ?? (!context && !key ? projects[0] : null);
+      if ((context || key) && !target) throw fail('PROJECT_CHANGED');
       const next = target ? await access.read(target) : null;
-      basis = next;
+      if (stopped) return;
+      if (!isCurrent(selected)) throw fail('PANEL_CONTEXT_CHANGED');
+      basis = next; selection = selected;
       publish({ projects, projectKey: target?.key ?? '', entries: copy(next?.entries ?? []), loaded: true, dirty: false, needsRefresh: false });
-    } catch (error) { publish({ error: MEMORY_ERRORS[error?.code] ?? MEMORY_ERRORS.HOST_CALL_FAILED, needsRefresh: true }); }
-    finally { publish({ busy: false }); }
+    } catch (error) {
+      const cleared = context && !state.dirty && !isCurrent(selection) ? { loaded: false, entries: [], projectKey: '' } : {};
+      publish({ ...cleared, error: MEMORY_ERRORS[error?.code] ?? MEMORY_ERRORS.HOST_CALL_FAILED, needsRefresh: true });
+    } finally {
+      publish({ busy: false });
+      if (pendingFollow) { pendingFollow = false; follow(); }
+    }
   };
+  function follow() {
+    if (stopped || !context) return;
+    if (state.busy) { pendingFollow = true; return; }
+    if (isCurrent(selection) && state.loaded) return;
+    if (state.dirty) publish({ needsRefresh: true, error: MEMORY_ERRORS.PANEL_CONTEXT_CHANGED, message: '' });
+    else void load();
+  }
+  const unsubscribeContext = context?.subscribe(follow);
   const edit = entries => {
     if (stopped || state.busy || !state.loaded || !basis) return;
     publish({ entries, dirty: entryStamp(entries) !== entryStamp(basis.entries), message: '', error: state.needsRefresh ? state.error : '' });
@@ -132,16 +179,20 @@ export function createMemoryEditor(access) {
     remove(id) { edit(state.entries.filter(e => e.id !== id)); },
     async save() {
       if (stopped || state.busy || !state.dirty || !basis || state.needsRefresh) return;
+      if (!isCurrent(selection)) { follow(); return; }
       publish({ busy: true, error: '', message: '' });
       try {
-        const result = await access.save(basis, state.entries);
+        const result = await access.save(basis, state.entries, context ? { selection, isCurrent: () => !stopped && isCurrent(selection) } : {});
         if (result.status === 'saved') {
           basis = result.basis;
           publish({ entries: copy(basis.entries), dirty: false, message: '已保存记忆 · 回读验证成功' });
         } else publish({ error: `${MEMORY_ERRORS[result.errorCode] ?? MEMORY_ERRORS.HOST_CALL_FAILED}${result.status === 'unverified' ? ' 保存可能已发生，结果待确认。' : ''}`, needsRefresh: result.errorCode !== 'INVALID_ENTRIES' });
       } catch { publish({ error: '保存结果待确认，请重新读取并核对，不要重复提交。', needsRefresh: true }); }
-      finally { publish({ busy: false }); }
+      finally {
+        publish({ busy: false });
+        if (pendingFollow) { pendingFollow = false; follow(); }
+      }
     },
-    stop() { stopped = true; listeners.clear(); },
+    stop() { stopped = true; unsubscribeContext?.(); listeners.clear(); },
   };
 }
