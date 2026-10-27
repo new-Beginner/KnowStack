@@ -62,9 +62,9 @@ async function rig(t, options = {}) {
     advance:ms=>{clock+=ms;}, writes:()=>calls.filter(c=>c.key.endsWith('Save'))};
 }
 
-test('0.4.4 manifest loads native append tools and panel-following memory editor, with no file or network permissions',()=>{
-  assert.equal(manifest.version,'0.4.4'); assert.equal(manifest.main,'main.js');
-  assert.deepEqual(manifest.contributes.agentTools.map(t=>t.name),['read_memory','remember']);
+test('0.5.0 manifest loads append and read-only reminder tools without extra permissions',()=>{
+  assert.equal(manifest.version,'0.5.0'); assert.equal(manifest.main,'main.js');
+  assert.deepEqual(manifest.contributes.agentTools.map(t=>t.name),['read_memory','remember','report_outdated_memory']);
   assert.ok(!manifest.permissions.some(p=>/^fs\.|net\.|desktop\./.test(p)));
   assert.deepEqual(manifest.contributes.agentExtensions,['knowstack-extension.js']);
   assert.equal(manifest.contributes.settings.find(x=>x.key==='autoSave').default,true);
@@ -275,4 +275,81 @@ test('historical cards coalesce concurrent same-session metadata checks without 
   const next = await r.pump(r.service.renderer('mode', { lease: r.lease, sessionId: 'a', action: 'get' }));
   assert.equal(next.autoSave, true);
   assert.equal(r.calls.filter(c => c.key === 'sessionGet').length, 2);
+});
+
+const obsolete = { memoryId: old.id, reason: '旧约定已被当前项目规则取代', evidence: '用户明确说明该约定已废弃，并要求核对后手动删除。' };
+const reportOld = async (r, basis, items=[obsolete], sid='a', turn='turn1') => r.pump(r.service.reportOutdated({readToken:basis.readToken,items},r.ctx(sid,turn)));
+const inspectOld = (r, report, action='get', memoryId=old.id, sid='a') => r.pump(r.service.renderer('outdated',{lease:r.lease,reportId:report.reportId,sessionId:sid,action,memoryId}));
+test('outdated reporting, inspection, opening and ignoring never save, even with autoSave ON',async t=>{
+  const r=await rig(t,{nativeSession:true});const initial=clone([...r.stores]);
+  const result=await reportOld(r,await r.read());assert.equal(result.status,'reported');
+  assert.equal(result.items[0].title,old.title);assert.equal(result.items[0].content,old.content);assert.deepEqual(result.saved,[]);
+  const opened=await inspectOld(r,result,'open');assert.equal(opened.target.projectKey,'group:ga');assert.deepEqual(opened.target.memory,old);
+  assert.equal(opened.target.sessionId,'a');assert.equal((await inspectOld(r,result)).items[0].state,'pending');
+  assert.equal((await inspectOld(r,result,'dismiss')).items[0].state,'dismissed');
+  assert.equal((await inspectOld(r,result,'open')).target,undefined);
+  assert.equal(r.writes().length,0);assert.deepEqual([...r.stores],initial);
+});
+test('outdated reports reject invalid IDs, cross-session/turn tokens, expiration and forged deletion fields',async t=>{
+  const r=await rig(t);const basis=await r.read();
+  for(const [token,sid,turn] of [['fake','a','turn1'],[basis.readToken,'c','turn1'],[basis.readToken,'a','turn2']]) await assert.rejects(reportOld(r,{readToken:token},[obsolete],sid,turn),/Read current/);
+  await assert.rejects(reportOld(r,basis,[{...obsolete,memoryId:'invented'}]),/Unknown memory/);
+  for(const item of [{...obsolete,action:'delete'},{...obsolete,evidence:''},{...obsolete,title:'forged'},{...obsolete,reason:'字'.repeat(301)},{...obsolete,evidence:'token=abcdefghijklmnopqrstuvwxyz'}]) await assert.rejects(reportOld(r,basis,[item]));
+  await assert.rejects(reportOld(r,basis,[obsolete,obsolete]));
+  await assert.rejects(r.service.reportOutdated({readToken:basis.readToken,items:[obsolete],projectPath:'D:/beta'},r.ctx()));
+  r.advance(300001);await assert.rejects(reportOld(r,basis),/Read current/);assert.equal(r.writes().length,0);
+});
+test('memory changes, session moves and group replacement invalidate reports without writes',async t=>{
+  for(const change of ['content','session','group']) {
+    const r=await rig(t);const basis=await r.read();
+    if(change==='content')r.stores.get('ga')[0].content='新内容';
+    if(change==='session')r.sessions.a='D:/beta';
+    if(change==='group'){r.groups[0].id='replacement';r.stores.set('replacement',[old]);}
+    if(change==='session')await assert.rejects(reportOld(r,basis),/Read current/);
+    else assert.equal((await reportOld(r,basis)).status,'failed');
+    assert.equal(r.writes().length,0);
+  }
+});
+test('same unchanged memory is suppressed across rephrasing, turns and concurrent submissions in one session',async t=>{
+  const r=await rig(t);const basis=await r.read();
+  const results=await r.pump(Promise.all([r.service.reportOutdated({readToken:basis.readToken,items:[obsolete]},r.ctx()),r.service.reportOutdated({readToken:basis.readToken,items:[{...obsolete,reason:'换一种说法'}]},r.ctx())]));
+  assert.deepEqual(results.map(v=>v.status).sort(),['reported','skipped']);
+  const report=results.find(v=>v.status==='reported');await inspectOld(r,report,'dismiss');
+  assert.equal((await reportOld(r,await r.read('a','turn2'),[obsolete],'a','turn2')).status,'skipped');
+  assert.equal((await reportOld(r,await r.read('c'),[obsolete],'c')).status,'reported');assert.equal(r.writes().length,0);
+});
+test('review requires renderer lease and originating session; delete and approve actions do not exist',async t=>{
+  const r=await rig(t);const result=await reportOld(r,await r.read());
+  await assert.rejects(inspectOld(r,result,'get',old.id,'b'),/another session/);
+  await assert.rejects(r.service.renderer('outdated',{reportId:result.reportId,sessionId:'a',action:'get'}),/lease/);
+  for(const action of ['delete','approve','replace'])await assert.rejects(inspectOld(r,result,action),/not supported/);
+  await assert.rejects(inspectOld(r,result,'open','forged'),/Unknown reminder/);assert.equal(r.writes().length,0);
+});
+test('old reminders detect changed or removed entries and never target replacements',async t=>{
+  for(const mode of ['changed','missing','moved','expired','group']) {
+    const r=await rig(t);const result=await reportOld(r,await r.read());
+    if(mode==='changed')r.stores.get('ga')[0].content='已纠正';
+    if(mode==='missing')r.stores.set('ga',[]);
+    if(mode==='moved')r.sessions.a='D:/beta';
+    if(mode==='expired')r.advance(900001);
+    if(mode==='group'){r.groups[0].id='replacement';r.stores.set('replacement',[old]);}
+    const opened=await inspectOld(r,result,'open');assert.equal(opened.target,undefined);
+    if(['changed','missing'].includes(mode))assert.equal(opened.items[0].state,mode);else assert.ok(opened.errorCode);
+    assert.equal(r.writes().length,0);
+  }
+});
+test('unrelated new memories do not invalidate the exact unchanged reminder target',async t=>{
+  const r=await rig(t);const result=await reportOld(r,await r.read());r.stores.get('ga').push({id:'other',...lesson});
+  assert.deepEqual((await inspectOld(r,result,'open')).target.memory,old);assert.equal(r.writes().length,0);
+});
+test('unloaded/recreated service has no actionable old reminder and loading never writes',async t=>{
+  const r=await rig(t);const result=await reportOld(r,await r.read());r.service.stop();
+  await assert.rejects(inspectOld(r,result),/lease/);
+  const next=await rig(t);await assert.rejects(inspectOld(next,result),/expired/);assert.equal(next.writes().length,0);
+});
+test('guidance forbids GUI/shell deletion and distinguishes obsolescence evidence from age',()=>{
+  const {GUIDANCE,receipt}=require('../knowstack-extension.js')._internals;
+  assert.match(GUIDANCE,/plugin_local_project_memory_api_probe_report_outdated_memory/);
+  assert.match(GUIDANCE,/GUI automation, shell or other tools/);assert.match(GUIDANCE,/Age, non-use/);
+  assert.equal(receipt({toolName:'plugin_local_project_memory_api_probe_report_outdated_memory',details:{status:'reported'}}),undefined);
 });

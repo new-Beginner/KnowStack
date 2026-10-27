@@ -18,6 +18,7 @@ export const MEMORY_ERRORS = {
   NONCANONICAL_MEMORY: '记忆结构无法安全保留，请使用宿主原生记忆界面处理。',
   INVALID_MEMORY: '宿主返回了无效记忆，未修改内容。',
   INVALID_ENTRIES: '每条记忆须有正文，标题不能换行；条目 ID 不能重复。',
+  REMINDER_CHANGED: '提醒对应的记忆或项目已变化，请关闭此窗口并重新检查。未定位或修改其他条目。',
   UNLOADED: '插件已卸载，请重新打开。',
 };
 
@@ -136,9 +137,9 @@ export function createMemoryAccess(bridge) {
   };
 }
 
-export function createMemoryEditor(access, { context } = {}) {
-  let state = { projects: [], projectKey: '', entries: [], loaded: false, busy: false, dirty: false, needsRefresh: false, error: '', message: '', following: !!context };
-  let basis = null; let selection = null; let stopped = false; let pendingFollow = false;
+export function createMemoryEditor(access, { context, reminder } = {}) {
+  let state = { projects: [], projectKey: '', entries: [], loaded: false, busy: false, dirty: false, needsRefresh: false, error: '', message: '', following: !!context, pinned: !!reminder, highlightId: reminder?.memory?.id };
+  let basis = null; let selection = null; let stopped = false; let pendingFollow = false; let checkedReminder = false;
   const listeners = new Set();
   const publish = patch => { if (stopped) return; state = { ...state, ...patch }; for (const listener of listeners) listener(state); };
   const isCurrent = selected => {
@@ -158,9 +159,16 @@ export function createMemoryEditor(access, { context } = {}) {
       const projects = current?.projects ?? await access.projects();
       const target = current?.project ?? projects.find(p => p.key === key) ?? (!context && !key ? projects[0] : null);
       if ((context || key) && !target) throw fail('PROJECT_CHANGED');
+      if (reminder && target?.key !== reminder.projectKey) throw fail('REMINDER_CHANGED');
       const next = target ? await access.read(target) : null;
       if (stopped) return;
+      if (reminder && (await access.current(selected)).project.key !== reminder.projectKey) throw fail('REMINDER_CHANGED');
       if (!isCurrent(selected)) throw fail('PANEL_CONTEXT_CHANGED');
+      if (reminder && !checkedReminder) {
+        const entry = next?.entries.find(e => e.id === reminder.memory.id);
+        if (target?.key !== reminder.projectKey || !entry || entry.title !== reminder.memory.title || entry.content !== reminder.memory.content) throw fail('REMINDER_CHANGED');
+        checkedReminder = true;
+      }
       basis = next; selection = selected;
       publish({ projects, projectKey: target?.key ?? '', entries: copy(next?.entries ?? []), loaded: true, dirty: false, needsRefresh: false });
     } catch (error) {

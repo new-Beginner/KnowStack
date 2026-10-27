@@ -8,12 +8,13 @@ export const MEMORY_CSS = `
 .knowstack-editor header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:22px 24px 14px}.knowstack-editor h2{font-size:20px;margin:0 0 8px;font-weight:650}.knowstack-editor p{margin:0;line-height:1.6;color:var(--text-secondary,#527089);font-size:13px}.knowstack-editor button,.knowstack-editor input,.knowstack-editor textarea,.knowstack-editor select{font:inherit;color:inherit;box-sizing:border-box}.knowstack-editor button{cursor:pointer}.knowstack-editor button:disabled{cursor:default;opacity:.5}.knowstack-editor :is(button,input,textarea,select):focus-visible{outline:2px solid #1689bf;outline-offset:3px}.knowstack-editor .km-close{background:transparent;border:0;padding:0 5px;font-size:24px;line-height:1.2}
 .knowstack-editor .km-body{padding:0 24px;overflow-y:auto;overscroll-behavior:contain;min-height:0}.knowstack-editor .km-project{display:flex;flex-direction:column;gap:5px;margin-bottom:16px}.knowstack-editor select{width:100%;padding:8px 10px;background:var(--bg-secondary,#eaf3fb);border:1px solid var(--border-color,#d7e6ef);border-radius:8px}.knowstack-editor .km-path{font-size:12px;color:var(--text-secondary,#527089);overflow-wrap:anywhere}.knowstack-editor .km-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 0}.knowstack-editor .km-tools{display:flex;gap:16px}.knowstack-editor .km-link{border:0;background:transparent;padding:4px 0;color:var(--text-secondary,#376586)}.knowstack-editor .km-list{display:flex;flex-direction:column;gap:12px;margin:0 0 18px;padding:0;list-style:none}.knowstack-editor .km-item{padding:10px 12px;background:var(--bg-secondary,#edf5fb);border:1px solid var(--border-color,#d7e6ef);border-radius:13px}.knowstack-editor .km-item-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}.knowstack-editor .km-number{flex:none;color:var(--text-secondary,#376586);font-size:12px;min-width:23px;text-align:center}.knowstack-editor :is(input,textarea){width:100%;min-width:0;border:1px solid transparent;border-radius:10px;padding:10px 12px;background:var(--bg-tertiary,#dceef8);line-height:1.5}.knowstack-editor textarea{display:block;resize:vertical;min-height:100px;max-height:320px}.knowstack-editor .km-delete{flex:none;border:0;background:transparent;color:var(--text-secondary,#527089);padding:6px;font-size:18px}.knowstack-editor .km-empty{padding:22px 0}.knowstack-editor .km-error{color:var(--text-primary,#9e382d);background:var(--bg-secondary,#fff1ec);padding:10px 12px;border-left:3px solid #b75748;margin-bottom:16px;white-space:pre-wrap}.knowstack-editor footer{padding:16px 24px 22px;display:flex;flex-direction:column;gap:12px}.knowstack-editor .km-footer-row{display:flex;justify-content:space-between;align-items:center;gap:12px}.knowstack-editor .km-status{font-size:12px;color:var(--text-secondary,#527089)}.knowstack-editor .km-buttons{display:flex;gap:10px;flex:none}.knowstack-editor .km-cancel{border:0;background:transparent;padding:8px 10px}.knowstack-editor .km-save{border:0;background:#117bb4;color:white;border-radius:10px;padding:8px 16px}
 .knowstack-confirm-backdrop{position:fixed;inset:0;display:grid;place-items:center;padding:20px;box-sizing:border-box;background:rgba(20,46,65,.3)}.knowstack-memory-confirm{width:min(410px,100%);max-height:calc(100dvh - 40px);overflow:auto;box-sizing:border-box;padding:22px;border:1px solid var(--border-color,#d7e6ef);border-radius:16px;background:var(--bg-elevated,#f7fbff);color:var(--text-primary,#193a51);box-shadow:0 18px 60px #102c4c33;font:inherit}.knowstack-memory-confirm h3{margin:0 0 12px;font-size:17px}.knowstack-memory-confirm p{margin:0 0 20px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6}.knowstack-memory-confirm .km-confirm-actions{display:flex;justify-content:flex-end;gap:10px}.knowstack-memory-confirm button{font:inherit;cursor:pointer;padding:8px 14px;border:1px solid var(--border-color,#d7e6ef);border-radius:9px;color:inherit;background:var(--bg-secondary,#eaf3fb)}.knowstack-memory-confirm .km-confirm-accept{border-color:transparent;background:#117bb4;color:white}.knowstack-memory-confirm button:focus-visible{outline:2px solid #1689bf;outline-offset:3px}
+.knowstack-editor .km-highlight{border-color:#b78320;box-shadow:inset 3px 0 #b78320}.knowstack-editor .km-highlight::before{content:'疑似过时 · 请核对后自行决定是否删除';display:block;color:var(--text-primary,#735012);font-size:12px;margin-bottom:8px}.knowstack-editor .km-body{overflow-wrap:anywhere}
 @media(max-width:480px){.knowstack-editor-backdrop{padding:10px}.knowstack-editor{max-height:calc(100dvh - 20px);border-radius:15px}.knowstack-editor header{padding:18px 16px 12px}.knowstack-editor .km-body{padding:0 16px}.knowstack-editor footer{padding:14px 16px 18px}.knowstack-editor .km-footer-row{align-items:flex-start;flex-direction:column}.knowstack-editor .km-buttons{align-self:flex-end}.knowstack-editor .km-item{padding:8px}.knowstack-editor .km-item-head{gap:5px}}
 `;
 
 export function mountMemoryEditor(container, controller, onClose, doc = document) {
   const previousFocus = doc.activeElement;
-  let disposed = false; let signature = ''; let unsubscribe; let pendingConfirmation = null;
+  let disposed = false; let signature = ''; let unsubscribe; let pendingConfirmation = null; let focusedReminder = false;
   const el = (tag, className, text) => {
     const node = doc.createElement(tag); if (className) node.className = className;
     if (text !== undefined) node.textContent = text; return node;
@@ -33,7 +34,7 @@ export function mountMemoryEditor(container, controller, onClose, doc = document
   const header = el('header'); const heading = el('div');
   heading.append(el('h2', '', '项目记忆'), el('p', '', '保存会在项目聊天之间持续使用的上下文。'));
   const dismiss = button('km-close', '×', close, '关闭项目记忆'); header.append(heading, dismiss);
-  const body = el('div', 'km-body'); const projectRow = el('label', 'km-project', controller.getState().following ? '当前面板项目 · 自动跟随' : '项目');
+  const body = el('div', 'km-body'); const projectRow = el('label', 'km-project', controller.getState().pinned ? '提醒所属项目 · 固定定位' : controller.getState().following ? '当前面板项目 · 自动跟随' : '项目');
   const select = el('select'); select.setAttribute('aria-label', '选择记忆所属项目');
   const path = el('span', 'km-path'); projectRow.append(select, path);
   select.addEventListener('change', () => {
@@ -104,7 +105,7 @@ export function mountMemoryEditor(container, controller, onClose, doc = document
       const index = [...list.children].findIndex(row => row.contains(active));
       signature = next; list.replaceChildren();
       state.entries.forEach((entry, i) => {
-        const row = el('li', 'km-item'); row.dataset.id = entry.id;
+        const row = el('li', entry.id === state.highlightId ? 'km-item km-highlight' : 'km-item'); row.dataset.id = entry.id;
         const head = el('div', 'km-item-head'); const title = el('input'); title.type = 'text'; title.value = entry.title; title.placeholder = '记忆标题（可选）'; title.setAttribute('aria-label', `第 ${i + 1} 条记忆标题`);
         title.addEventListener('input', () => controller.update(entry.id, 'title', title.value));
         const remove = button('km-delete', '⌫', () => {
@@ -131,6 +132,11 @@ export function mountMemoryEditor(container, controller, onClose, doc = document
     save.disabled = state.busy || !state.dirty || state.needsRefresh || state.entries.some(e => !e.content.trim());
     save.textContent = state.busy ? '处理中…' : '保存记忆';
     status.textContent = state.busy ? '正在处理，请勿关闭或重载插件…' : state.message || (state.dirty ? '有未保存的修改' : state.following ? '自动跟随当前面板项目 · 不会自动保存' : '只读取，不会自动保存');
+    if (state.pinned && !state.dirty && !state.busy && !state.message && !state.error) status.textContent = '仅定位提醒所属项目 · 未自动删除或保存';
+    if (!focusedReminder && state.loaded && !state.busy && state.highlightId) {
+      const row = [...list.children].find(node => node.dataset.id === state.highlightId);
+      if (row) { focusedReminder = true; row.scrollIntoView({ block: 'center' }); row.querySelector('input')?.focus(); }
+    }
   };
   dialog.addEventListener('keydown', event => {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); return; }

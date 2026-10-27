@@ -9,9 +9,10 @@ async function onLoad() {
     getSettings: () => pi.plugin.getSettings(),
     setSettings: partial => pi.plugin.setSettings(partial),
   });
+  const handlers = { read_memory: service.read, remember: service.remember, report_outdated_memory: service.reportOutdated };
   for (const definition of manifest.contributes.agentTools) {
-    const execute = definition.name === 'read_memory' ? (args, context) => service.read(args, context)
-      : (args, context) => service.remember(args, context);
+    const execute = handlers[definition.name];
+    if (typeof execute !== 'function') throw new Error('Unknown KnowStack tool');
     await pi.agent.registerTool({ ...definition, execute });
   }
 }

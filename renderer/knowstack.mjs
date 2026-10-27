@@ -5,7 +5,8 @@ import { createProjectController } from './project-controls.mjs';
 import { installSettingsEntry, SETTINGS_CSS } from './settings-ui.mjs';
 import { createMemoryAccess } from './memory-editor.mjs';
 import { installMemoryEntry, MEMORY_CSS } from './memory-ui.mjs';
-const VERSION = '0.4.4';
+import { makeOutdatedCard, createReminderEditor, OUTDATED_CSS } from './outdated-ui.mjs';
+const VERSION = '0.5.0';
 const h = React.createElement;
 let runtime;
 
@@ -92,6 +93,8 @@ export async function onLoad(pi) {
   let projectController;
   const memoryAccess = createMemoryAccess(globalThis.piDesktop);
   state.disposers.push(() => memoryAccess.stop());
+  const reminderEditor = globalThis.document ? createReminderEditor(pi, memoryAccess) : null;
+  state.disposers.push(() => reminderEditor?.stop());
   if (globalThis.document) {
     projectController = createProjectController({ bridge: globalThis.piDesktop, call });
     state.disposers.push(() => projectController.stop());
@@ -109,8 +112,13 @@ export async function onLoad(pi) {
 .knowstack-head [data-state=saved]{color:#25745a}.knowstack-head [data-state=unverified]{color:#9b6a16}
 ${SETTINGS_CSS}
 ${MEMORY_CSS}
+${OUTDATED_CSS}
 `));
   for (const toolName of ['read_memory', 'remember']) state.disposers.push(pi.slots.register({ slot: 'toolCard', toolName, component }));
+  state.disposers.push(pi.slots.register({ slot: 'toolCard', toolName: 'report_outdated_memory', component: makeOutdatedCard(React, call, (target, onClose) => {
+    if (!reminderEditor) throw new Error('Renderer document unavailable');
+    return reminderEditor.open(target, onClose);
+  }) }));
   const poll = async () => {
     if (state.stopped || state.busy) return;
     state.busy = true;

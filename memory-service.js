@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const manifest = require('./manifest.json');
+const { createOutdatedReports } = require('./outdated-reports.js');
 const copy = value => JSON.parse(JSON.stringify(value));
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const norm = value => String(value).normalize('NFKC').replace(/\r\n/g, '\n').trim();
@@ -36,6 +37,7 @@ function createService({ getSession, getSettings, setSettings, now = Date.now, r
   const sessionChecks = new Map();
   let active = true; let ready = false; let lease = crypto.randomUUID();
   const projectSettings = createProjectSettings({ getSettings, setSettings });
+  const outdated = createOutdatedReports({ session, readNative: (owner, extra) => rpc('read', owner, extra), getBasis: token => { sweep(); return bases.get(token); }, now });
   const settings = projectPath => projectSettings.mode(projectPath);
   async function mode(args) {
     const owner = await session({ sessionId: args.sessionId, turnId: 'settings' });
@@ -208,13 +210,15 @@ function createService({ getSession, getSettings, setSettings, now = Date.now, r
       throw new Error('Invalid project settings action');
     }
     if (method === 'review') return review(args);
+    if (method === 'outdated') return outdated.review(args);
     throw new Error('Unknown KnowStack renderer method');
   }
   function stop() {
     active = false; ready = false; lease = crypto.randomUUID();
     for (const p of jobs.values()) { clearTimeout(p.timer); p.resolve(errorResult('PLUGIN_UNLOADED', p.claimed && p.job.operation === 'append' ? 'unverified' : 'failed')); }
     jobs.clear(); bases.clear();
+    outdated.stop();
   }
-  return { read, remember, renderer, stop, settings, _records: records };
+  return { read, remember, reportOutdated: outdated.report, renderer, stop, settings, _records: records };
 }
 module.exports = { createService, validateItems, novel, pathKey };

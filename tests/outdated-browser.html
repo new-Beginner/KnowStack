@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>KnowStack 0.5.0 过时记忆提醒测试</title>
+<style>body{margin:0;background:#eef5fa;color:#193a51;font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif}main{padding:24px;max-width:760px;margin:auto}h1{font-size:22px}button{font:inherit;cursor:pointer}#card{background:#f7fbff;padding:12px;border:1px solid #d7e6ef;border-radius:12px;overflow-wrap:anywhere}.knowstack-memory{border-left:3px solid #315dab;padding:10px 14px}.knowstack-head{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}.knowstack-head span,small{font-size:12px}.knowstack-item p{white-space:pre-wrap}.knowstack-actions{display:flex;gap:10px;margin:12px 0}.knowstack-actions button{padding:8px 12px;max-width:100%}.knowstack-actions button:focus-visible{outline:2px solid #1689bf;outline-offset:3px}small{display:block}pre{white-space:pre-wrap}#chat{width:100%;box-sizing:border-box}</style></head>
+<body><main><h1>疑似过时记忆提醒</h1><p>KnowStack 0.5.0 · 模拟项目数据，不访问真实宿主。报告只提醒，用户自行决定是否删除。</p><div id="card"></div><pre id="results">待运行</pre><textarea id="chat" aria-label="模拟聊天输入框" placeholder="关闭后检查聊天输入"></textarea></main><div id="layers"></div>
+<script type="module">
+import {makeOutdatedCard,createReminderEditor,OUTDATED_CSS} from '../renderer/outdated-ui.mjs';
+import {createMemoryAccess} from '../renderer/memory-editor.mjs';
+import {MEMORY_CSS} from '../renderer/memory-ui.mjs';
+const style=document.createElement('style');style.textContent=MEMORY_CSS+OUTDATED_CSS;document.head.append(style);
+const old={id:'old',title:'旧构建工具约定',content:'本项目使用旧构建工具；相关配置位于 legacy.config.js。'};
+const keep={id:'keep',title:'必须保留的项目规则',content:'测试提醒时不得删除或改写这条记忆。'};
+let stores={ga:[structuredClone(old),structuredClone(keep)],gb:[{...old,content:'其他项目同 ID，不能误删。'}]},writes=0,revision=0,sessionPath='D:/alpha',offline=false;
+const keys=['sessionGet','projectGroupList','projectGroupMemoryGet','projectGroupMemorySave'];
+const bridge={channels:{invoke:Object.fromEntries(keys.map(k=>[k,k]))},async invoke(key,input){
+ await new Promise(r=>setTimeout(r,2));if(key==='sessionGet')return{ok:true,data:{session:{id:input.id,projectPath:sessionPath,source:'desktop'}}};
+ if(key==='projectGroupList')return{ok:true,data:{groups:[{id:'ga',name:'A · 提醒所属项目',roots:[{path:'D:/alpha'}]},{id:'gb',name:'B · 其他项目',roots:[{path:'D:/beta'}]}]}};
+ if(key.endsWith('Save')){stores[input.groupId]=structuredClone(input.entries);writes++;revision++;}
+ const entries=structuredClone(stores[input.groupId]);return{ok:true,data:{memory:{entries,content:entries.map(e=>e.title+'\n'+e.content).join('\n\n'),updatedAt:revision}}};
+}};
+const access=createMemoryAccess(bridge);
+const pi={ui:{openLayer(){const element=document.createElement('div');element.style.cssText='position:fixed;top:0;left:0;width:0;height:0;z-index:600';document.getElementById('layers').append(element);return{element,close:()=>element.remove()};}}};
+const editor=createReminderEditor(pi,access,document);
+let report,disposeCard;
+const makeReport=()=>({status:'reported',reportId:'report',sessionId:'origin',items:[{memoryId:old.id,title:old.title,content:old.content,reason:'构建工具已经迁移，旧配置文件不再使用。',evidence:'模拟证据：新构建配置与依赖已核对。请由用户核实。',state:'pending'}],saved:[]});
+const call=async(method,args)=>{
+ if(method!=='outdated')throw Error('Unexpected action');if(offline)throw Error('Reminder no longer exists');
+ const item=report.items[0];if(args.action==='dismiss')item.state='dismissed';
+ if(sessionPath!=='D:/alpha'){report.status='expired';report.errorCode='SESSION_MOVED';item.state='unavailable';}
+ const entry=stores.ga.find(e=>e.id===old.id);
+ if(item.state==='pending'&&!entry)item.state='missing';else if(item.state==='pending'&&entry.content!==old.content)item.state='changed';
+ const value=structuredClone(report);
+ if(args.action==='open'&&item.state==='pending'&&value.status==='reported')value.target={sessionId:'origin',projectPath:'D:/alpha',projectKey:'group:ga',memory:structuredClone(old)};
+ return value;
+};
+// Small host-hooks test adapter; the production card factory itself is imported above.
+function mountCard(value){
+ disposeCard?.();let values=[],deps=[],cleanups=[],cursor=0,queued=false,alive=true,effects=[];
+ const root=document.getElementById('card');const props={sessionId:'origin',toolStatus:'success',toolResult:value};
+ const schedule=()=>{if(queued||!alive)return;queued=true;queueMicrotask(()=>{queued=false;if(alive)render();});};
+ const react={createElement(type,attrs,...children){const node=document.createElement(type);for(const[k,v]of Object.entries(attrs??{})){if(k==='key')continue;if(k.startsWith('on'))node.addEventListener(k.slice(2).toLowerCase(),v);else if(k==='className')node.className=v;else if(k==='disabled')node.disabled=v;else node.setAttribute(k,v);}for(const child of children.flat(Infinity)){if(child===null||child===undefined||child===false)continue;node.append(child instanceof Node?child:document.createTextNode(String(child)));}return node;},
+ useState(initial){const i=cursor++;if(!(i in values))values[i]=initial;return[values[i],v=>{values[i]=v;schedule();}];},
+ useEffect(fn,next){const i=cursor++;if(!deps[i]||next.some((v,n)=>v!==deps[i][n])){deps[i]=next;effects.push(()=>{cleanups[i]?.();cleanups[i]=fn();});}}};
+ const component=makeOutdatedCard(react,call,(target,closed)=>editor.open(target,closed));
+ const render=()=>{cursor=0;const tree=component(props);root.replaceChildren(...(tree?[tree]:[]));while(effects.length)effects.shift()();};
+ disposeCard=()=>{alive=false;cleanups.forEach(fn=>fn?.());};render();
+}
+const pause=()=>new Promise(r=>setTimeout(r,10));
+const wait=async(predicate)=>{for(let i=0;i<300;i++){if(predicate())return;await pause();}throw Error('UI timeout');};
+const cardButton=text=>[...document.querySelectorAll('#card button')].find(b=>b.textContent===text);
+const check=(value,message)=>{if(!value)throw Error(message);};
+const reset=async()=>{stores.ga=[structuredClone(old),structuredClone(keep)];sessionPath='D:/alpha';offline=false;report=makeReport();mountCard(structuredClone(report));await wait(()=>cardButton('打开记忆并定位')&&!cardButton('打开记忆并定位').disabled);};
+const open=async()=>{cardButton('打开记忆并定位').click();await wait(()=>document.querySelector('.km-highlight')&&!document.querySelector('.km-refresh').disabled);};
+window.testApp={reset,open,async screenshot(){await reset();},async screenshotEditor(){await open();},get writes(){return writes;}};
+window.runBrowserTests=async()=>{
+ const passed=[];const run=async(name,fn)=>{await fn();passed.push(name);};
+ try{
+ await reset();
+ await run('提醒卡只有打开和忽略，不提供删除或保存按钮',async()=>{check(document.querySelectorAll('#card button').length===2,'wrong controls');check(writes===0,'initial write');});
+ await run('定位原项目和准确条目，不删除草稿、不自动保存',async()=>{await open();check(document.querySelector('select').value==='group:ga','wrong group');check(document.querySelector('select').disabled,'project not pinned');check(document.querySelector('.km-highlight').dataset.id==='old','wrong highlight');check(document.querySelectorAll('.km-item').length===2,'auto removed draft');check(document.querySelector('.km-save').disabled,'draft changed on open');check(writes===0,'open wrote');});
+ await run('零尺寸挂载点兼容、窄屏无横向溢出且高亮可见',async()=>{const box=document.querySelector('.knowstack-editor').getBoundingClientRect();check(box.left>=0&&box.right<=innerWidth&&box.bottom<=innerHeight,'editor overflow');const field=document.querySelector('.km-highlight input');const rect=field.getBoundingClientRect();check(document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)===field,'highlight input covered');check(document.documentElement.scrollWidth<=innerWidth,'page horizontal overflow');});
+ await run('取消删除不改草稿、确认后仍只改草稿',async()=>{document.querySelector('.km-highlight .km-delete').click();document.querySelector('.km-confirm-cancel').click();check(document.querySelectorAll('.km-item').length===2,'cancel applied');document.querySelector('.km-highlight .km-delete').click();document.querySelector('.km-confirm-accept').click();check(document.querySelectorAll('.km-item').length===1&&stores.ga.length===2&&writes===0,'confirmation wrote memory');});
+ await run('用户点击保存才删除且保留其他记忆，关闭后提醒失效',async()=>{document.querySelector('.km-save').click();await wait(()=>!document.querySelector('.km-refresh').disabled);check(writes===1&&stores.ga.length===1&&stores.ga[0].id==='keep','manual deletion failed');check(stores.gb[0].content==='其他项目同 ID，不能误删。','other project touched');check(document.querySelector('.km-status').textContent.includes('回读验证成功'),'missing success receipt');document.querySelector('.km-cancel').click();await wait(()=>document.getElementById('card').textContent.includes('条目已不存在'));check(!cardButton('打开记忆并定位'),'stale button remains');});
+ await run('本次忽略不删记忆、不产生写入',async()=>{await reset();const before=writes;cardButton('本次忽略').click();await wait(()=>document.getElementById('card').textContent.includes('本次已忽略'));check(writes===before&&stores.ga.length===2,'dismiss wrote');});
+ await run('原文发生变化后不再打开旧条目',async()=>{await reset();stores.ga[0].content='用户已修正的新原文';cardButton('打开记忆并定位').click();await wait(()=>document.getElementById('card').textContent.includes('原文已变化'));check(!document.querySelector('.knowstack-editor'),'opened changed target');});
+ await run('会话换项目后提醒失效，不读取其他项目到编辑器',async()=>{await reset();sessionPath='D:/beta';cardButton('打开记忆并定位').click();await wait(()=>document.getElementById('card').textContent.includes('SESSION_MOVED'));check(!document.querySelector('.knowstack-editor'),'opened moved session');});
+ await run('重载后旧卡片不再可操作',async()=>{await reset();offline=true;mountCard(makeReport());await wait(()=>document.getElementById('card').textContent.includes('提醒已失效或连接不可用'));check([...document.querySelectorAll('#card button')].every(b=>b.disabled),'old controls enabled');});
+ await run('标题原因和依据按文本渲染，不执行 HTML',async()=>{offline=false;report=makeReport();report.items[0].title='<img src=x onerror=bad()>';report.items[0].evidence='<script>bad()<\/script>';mountCard(structuredClone(report));await pause();check(!document.querySelector('#card img,#card script'),'HTML injected');});
+ const value={passed:passed.length,failed:0,tests:passed};document.getElementById('results').textContent=JSON.stringify(value,null,2);return value;
+ }catch(error){const value={passed:passed.length,failed:1,error:error.message,tests:passed};document.getElementById('results').textContent=JSON.stringify(value,null,2);return value;}
+};
+await reset();
+</script></body></html>

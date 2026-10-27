@@ -14,6 +14,7 @@ async function rendererHarness(handler = async method => method === 'mode' ? {au
   const {SETTINGS_CSS}=await import('../renderer/settings-ui.mjs');
   const {createMemoryAccess}=await import('../renderer/memory-editor.mjs');
   const {MEMORY_CSS}=await import('../renderer/memory-ui.mjs');
+  const {makeOutdatedCard,createReminderEditor,OUTDATED_CSS}=await import('../renderer/outdated-ui.mjs');
   const source=fs.readFileSync(path.join(root,'renderer/knowstack.mjs'),'utf8').replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'');
   const values=[]; const deps=new Map(); const cleanups=new Map(); const effects=[];
   let cursor=0; const intervals=new Set(); const registrations=[]; let disposed=0; const calls=[];
@@ -22,7 +23,7 @@ async function rendererHarness(handler = async method => method === 'mode' ? {au
     useState(initial){const i=cursor++;if(!(i in values))values[i]=initial;return[values[i],v=>{values[i]=typeof v==='function'?v(values[i]):v;}];},
     useEffect(fn,next){const i=cursor++;const previous=deps.get(i);if(!previous||next.some((v,n)=>v!==previous[n])){deps.set(i,next);effects.push(()=>{cleanups.get(i)?.();cleanups.set(i,fn());});}},
   };
-  const sandbox={module:{exports:{}},React,unwrapResult,STATUS_LABELS,SETTINGS_CSS,MEMORY_CSS,createMemoryAccess,
+  const sandbox={module:{exports:{}},React,unwrapResult,STATUS_LABELS,SETTINGS_CSS,MEMORY_CSS,createMemoryAccess,makeOutdatedCard,createReminderEditor,OUTDATED_CSS,
     runNativeJob:async()=>{throw new Error('No native job expected in UI-only tests');},
     console,
     setInterval(fn,ms){const timer={fn,ms,unref(){}};intervals.add(timer);return timer;},
@@ -41,7 +42,7 @@ async function rendererHarness(handler = async method => method === 'mode' ? {au
   await sandbox.module.exports.onLoad(pi);
   const component=registrations[0].component;
   return {calls,intervals,registrations,
-    render(props){cursor=0;const tree=component(props);while(effects.length)effects.shift()();return tree;},
+    render(props, tool='read_memory'){cursor=0;const tree=registrations.find(r=>r.toolName===tool).component(props);while(effects.length)effects.shift()();return tree;},
     cleanup(){for(const fn of cleanups.values())if(typeof fn==='function')fn();sandbox.module.exports.onUnload();},
     disposed:()=>disposed,
   };
@@ -61,10 +62,10 @@ const props=result=>({sessionId:'a',toolStatus:'success',toolResult:result});
 
 test('renderer loads only new cards, polls no write on load, disposes registrations',async()=>{
   const r=await rendererHarness();
-  assert.deepEqual(r.registrations.map(x=>x.toolName),['read_memory','remember']);
+  assert.deepEqual(r.registrations.map(x=>x.toolName),['read_memory','remember','report_outdated_memory']);
   assert.equal(r.calls.some(x=>['review','report'].includes(x.method)),false);
   assert.equal(r.intervals.size,1);await [...r.intervals][0].fn();await tick();
-  assert.equal(r.calls.at(-1).method,'next');r.cleanup();assert.equal(r.intervals.size,0);assert.equal(r.disposed(),3);
+  assert.equal(r.calls.at(-1).method,'next');r.cleanup();assert.equal(r.intervals.size,0);assert.equal(r.disposed(),4);
 });
 test('manual card shows exact content, not success; approve changes only after reply',async()=>{
   const r=await rendererHarness(async(method,args)=>{
@@ -115,13 +116,44 @@ test('new main registers only formal tools and forwards trusted context',async()
   const registered=[];const removed=[];const events=[];let stopped=0;
   const source=fs.readFileSync(path.join(root,manifest.main),'utf8');
   const realRequire=createRequire(path.join(root,manifest.main));
-  const fakeService={stop(){stopped++;},read(args,ctx){events.push({kind:'read',args,ctx});return{status:'read'};},remember(args,ctx){events.push({kind:'remember',args,ctx});return{status:'skipped'};},renderer(method,args){return{method,args};}};
+  const fakeService={stop(){stopped++;},read(args,ctx){events.push({kind:'read',args,ctx});return{status:'read'};},remember(args,ctx){events.push({kind:'remember',args,ctx});return{status:'skipped'};},reportOutdated(args,ctx){events.push({kind:'outdated',args,ctx});return{status:'reported'};},renderer(method,args){return{method,args};}};
   const sandbox={module:{exports:{}},require:name=>name==='./memory-service.js'?{createService:()=>fakeService}:realRequire(name),pi:{agent:{registerTool:async x=>registered.push(x),unregisterTool:async name=>removed.push(name)}}};
   vm.runInNewContext(source,sandbox);await sandbox.module.exports.onLoad();
-  assert.deepEqual(registered.map(t=>t.name),['read_memory','remember']);assert.equal(events.length,0);
+  assert.deepEqual(registered.map(t=>t.name),['read_memory','remember','report_outdated_memory']);assert.equal(events.length,0);
   const ctx={sessionId:'real-session',turnId:'real-turn'};
-  await registered[0].execute({},ctx);await registered[1].execute({items:[]},ctx);
-  assert.equal(events[0].ctx,ctx);assert.equal(events[1].ctx,ctx);
-  await sandbox.module.exports.onUnload();assert.equal(stopped,1);assert.deepEqual(removed,['read_memory','remember']);
+  await registered[0].execute({},ctx);await registered[1].execute({items:[]},ctx);await registered[2].execute({items:[]},ctx);
+  assert.ok(events.every(e=>e.ctx===ctx));assert.equal(events[2].kind,'outdated');
+  await sandbox.module.exports.onUnload();assert.equal(stopped,1);assert.deepEqual(removed,['read_memory','remember','report_outdated_memory']);
   await assert.rejects(sandbox.module.exports.onRendererCall('next',{}),/not loaded/);
+});
+
+const warning={status:'reported',reportId:'report',sessionId:'a',items:[{memoryId:'old',title:'旧构建规则',content:'项目使用旧工具。',reason:'配置已迁移',evidence:'package.json 已核对',state:'pending'}],saved:[]};
+test('outdated card exposes only inspect and ignore, never delete or save',async()=>{
+  const r=await rendererHarness(async(method,args)=>{assert.equal(method,'outdated');return{...warning,items:warning.items.map(i=>({...i,state:args.action==='dismiss'?'dismissed':'pending'}))};});
+  try{
+    const p=props(warning);let tree=r.render(p,'report_outdated_memory');await tick();tree=r.render(p,'report_outdated_memory');
+    assert.match(text(tree),/疑似过时/);assert.match(text(tree),/未修改原生记忆/);assert.match(text(tree),/依据（模型提供/);
+    assert.deepEqual(nodes(tree,'button').map(n=>text(n)),['打开记忆并定位','本次忽略']);assert.equal(nodes(tree,'input').length,0);
+    await nodes(tree,'button').find(n=>text(n)==='本次忽略').props.onClick();tree=r.render(p,'report_outdated_memory');
+    assert.match(text(tree),/本次已忽略/);assert.equal(nodes(tree,'button').length,0);assert.ok(r.calls.every(c=>['connect','outdated'].includes(c.method)));
+  }finally{r.cleanup();}
+});
+test('stale/moved reminder card cannot open and failed refresh keeps controls disabled',async()=>{
+  for(const failure of ['expired','offline']) {
+    const r=await rendererHarness(async()=>{if(failure==='offline')throw Error('offline');return{...warning,status:'expired',errorCode:'SESSION_MOVED',items:warning.items.map(i=>({...i,state:'unavailable'}))};});
+    try{const p=props(warning);r.render(p,'report_outdated_memory');await tick();const tree=r.render(p,'report_outdated_memory');
+      assert.ok(nodes(tree,'button').every(n=>n.props.disabled));assert.match(text(tree),/失效|不可用/);
+    }finally{r.cleanup();}
+  }
+});
+test('cross-session reminders issue no inspection call and render no actionable controls',async()=>{
+  const r=await rendererHarness();try{const tree=r.render(props({...warning,sessionId:'other'}),'report_outdated_memory');await tick();
+    assert.match(text(tree),/不匹配/);assert.equal(nodes(tree,'button').length,0);assert.equal(r.calls.some(c=>c.method==='outdated'),false);
+  }finally{r.cleanup();}
+});
+test('outdated reason/evidence are rendered as text, including HTML-like payloads',async()=>{
+  const value={...warning,items:[{...warning.items[0],reason:'<img src=x onerror=bad()>',evidence:'<script>bad()</script>'}]};
+  const r=await rendererHarness(async()=>value);try{const tree=r.render(props(value),'report_outdated_memory');
+    assert.equal(nodes(tree,'img').length,0);assert.equal(nodes(tree,'script').length,0);assert.match(text(tree),/<script>/);
+  }finally{r.cleanup();}
 });

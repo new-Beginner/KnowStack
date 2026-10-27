@@ -22,7 +22,7 @@ async function rig(t, options = {}) {
     if (options.mismatch && revision) memory.entries = [];
     return { ok: true, data: { memory } };
   } };
-  const access = createMemoryAccess(bridge); const controller = createMemoryEditor(access, { context: options.context });
+  const access = createMemoryAccess(bridge); const controller = createMemoryEditor(access, { context: options.context, reminder: options.reminder });
   t.after(() => { controller.stop(); access.stop(); });
   return { access, controller, stores, calls, groups, setGroups(value) { groups = value; }, writes: () => calls.filter(c => c.key.endsWith('Save')) };
 }
@@ -227,4 +227,36 @@ test('DOM context connects to native editor; A-B-A during save invalidates the o
   assert.equal(controller.getState().entries[0].content, '保留草稿');
   await controller.load(); controller.update('old', 'content', '重新读取后保存'); await controller.save();
   assert.equal(r.writes().length, 1); assert.equal(r.stores.ga[0].content, '重新读取后保存');
+});
+
+test('reminder editor pins the originating session and highlights without staging a deletion',async t=>{
+  const context={get:()=>({sessionId:'origin',projectPath:'d:/a'}),subscribe:()=>()=>{}};
+  const reminder={projectKey:'group:ga',memory:old};
+  const r=await rig(t,{context,reminder});await r.controller.load('group:gb');
+  const state=r.controller.getState();assert.equal(state.projectKey,'group:ga');assert.equal(state.highlightId,old.id);
+  assert.equal(state.pinned,true);assert.equal(state.dirty,false);assert.deepEqual(state.entries,[old]);assert.equal(r.writes().length,0);
+  r.controller.remove(old.id);assert.equal(r.stores.ga.length,1);await r.controller.save();assert.deepEqual(r.stores.ga,[]);
+});
+test('reminder changed between report opening and editor load fails closed without fallback',async t=>{
+  const context={get:()=>({sessionId:'origin',projectPath:'d:/a'}),subscribe:()=>()=>{}};
+  for(const reminder of [{projectKey:'group:gb',memory:old},{projectKey:'group:ga',memory:{...old,content:'旧原文'}}]) {
+    const r=await rig(t,{context,reminder});await r.controller.load();assert.equal(r.controller.getState().loaded,false);
+    assert.match(r.controller.getState().error,/提醒对应/);assert.deepEqual(r.controller.getState().entries,[]);assert.equal(r.writes().length,0);
+  }
+});
+
+test('pinned reminder reread refuses a replacement project group instead of retargeting',async t=>{
+  const context={get:()=>({sessionId:'origin',projectPath:'d:/a'}),subscribe:()=>()=>{}};
+  const r=await rig(t,{context,reminder:{projectKey:'group:ga',memory:old}});await r.controller.load();
+  r.groups[0].id='replacement';r.stores.replacement=[old];await r.controller.load();
+  assert.equal(r.controller.getState().projectKey,'group:ga');assert.equal(r.controller.getState().needsRefresh,true);
+  assert.match(r.controller.getState().error,/提醒对应/);assert.equal(r.calls.some(c=>c.key==='projectGroupMemoryGet'&&c.input.groupId==='replacement'),false);
+  assert.equal(r.writes().length,0);
+});
+test('session move during pinned editor initial read is rejected before displaying entries',async t=>{
+  let path='d:/a';let move=true;
+  const context={get:()=>({sessionId:'origin',projectPath:'d:/a'}),subscribe:()=>()=>{}};
+  const r=await rig(t,{context,reminder:{projectKey:'group:ga',memory:old},session:id=>({id,projectPath:path}),hook({key}){if(move&&key==='projectGroupMemoryGet'){path='d:/b';move=false;}}});
+  await r.controller.load();assert.equal(r.controller.getState().loaded,false);assert.deepEqual(r.controller.getState().entries,[]);
+  assert.equal(r.writes().length,0);assert.ok(r.controller.getState().error);
 });
