@@ -6,6 +6,11 @@ export const OUTDATED_CSS = `
 .knowstack-outdated{border-left-color:#b78320}.knowstack-outdated .knowstack-head strong{color:var(--text-primary,#735012)}
 .knowstack-outdated .ko-context{font-size:12px;opacity:.8}.knowstack-outdated .ko-original{padding-left:12px;border-left:2px solid var(--border-color,#d7e6ef)}
 .knowstack-outdated .knowstack-actions{flex-wrap:wrap}.knowstack-outdated button:disabled{cursor:default;opacity:.5}
+.knowstack-outdated-final{box-sizing:border-box;width:100%;border:1px solid var(--border-color,#d7e6ef);border-left:4px solid #b78320;background:var(--bg-secondary,#f4f8fc);border-radius:8px;padding:14px 16px;margin:14px 0}
+.knowstack-outdated-final .knowstack-head strong{font-size:1.05em}.knowstack-outdated-final .ko-badge{color:var(--text-primary,#735012);font-weight:600;opacity:1}.knowstack-outdated-final .ko-icon{color:#b78320;font-size:20px;line-height:1}
+.knowstack-outdated-final .knowstack-actions button{border:1px solid var(--border-color,#c6d8e6);border-radius:6px;background:var(--bg-primary,#f7fbff);color:inherit;padding:7px 12px}
+.knowstack-outdated-final .knowstack-actions button:first-child{border-color:#b78320}.knowstack-outdated-final details summary{cursor:pointer;margin:6px 0}.knowstack-outdated-final .ko-safety{font-size:12px;margin:8px 0;opacity:.85}
+@media(max-width:480px){.knowstack-outdated-final{padding:12px}.knowstack-outdated-final .knowstack-head{gap:8px}}
 `;
 const ITEM_LABELS = { dismissed: '本次已忽略 · 未删除记忆', changed: '原文已变化 · 请重新检查', missing: '条目已不存在 · 此提醒已失效', unavailable: '提醒已失效 · 未执行删除' };
 
@@ -27,7 +32,7 @@ export function makeOutdatedCard(React, call, openEditor) {
         }).catch(() => { if (!cancelled) setError('提醒已失效或连接不可用。请重新检查；未执行删除。'); });
       }
       return () => { cancelled = true; };
-    }, [props.toolResult, props.sessionId]);
+    }, [reportId, props.sessionId, props.toolStatus]);
     if (initial?.sessionId && initial.sessionId !== props.sessionId) return h('p', { role: 'alert' }, '提醒与当前会话不匹配，未读取或修改记忆。');
     if (props.toolStatus === 'running') return h('p', { role: 'status' }, '知栈：正在核对疑似过时记忆，不会执行删除…');
     if (props.toolStatus === 'error') return h('p', { role: 'alert' }, '提醒未能生成；未执行删除。');
@@ -45,20 +50,62 @@ export function makeOutdatedCard(React, call, openEditor) {
       } catch { setError('无法打开或更新提醒。请先关闭已打开的记忆编辑器，再重试；未执行删除。'); }
       finally { setBusy(false); }
     };
-    return h('section', { className: 'knowstack-memory knowstack-outdated', 'aria-label': '疑似过时记忆提醒' },
-      h('div', { className: 'knowstack-head' }, h('strong', null, '知栈 · 疑似过时'), h('span', { role: 'status' }, data.status === 'expired' ? '提醒已失效' : '请用户核对')),
-      h('p', null, '此报告未修改原生记忆。是否删除，由你决定；自动保存开关不适用于删除。'),
+    const final = props.placement === 'final';
+    const controls = item => item.state === 'pending' && data.status === 'reported' ? h('div', { className: 'knowstack-actions' },
+      h('button', { type: 'button', disabled: busy || !verified, onClick: () => act('open', item.memoryId) }, '打开记忆并定位'),
+      h('button', { type: 'button', disabled: busy || !verified, onClick: () => act('dismiss', item.memoryId) }, '本次忽略')) : null;
+    return h('section', { className: `knowstack-memory knowstack-outdated${final ? ' knowstack-outdated-final' : ''}`, 'aria-label': '疑似过时记忆提醒', 'aria-live': final ? 'polite' : undefined },
+      h('div', { className: 'knowstack-head' }, final ? h('span', { className: 'ko-icon', 'aria-hidden': true }, '⚠') : null,
+        h('strong', null, final ? '知栈 · 过时记忆待检查' : '知栈 · 疑似过时'),
+        h('span', { className: 'ko-badge', role: 'status' }, data.status === 'expired' ? '提醒已失效' : final && !verified ? '正在核对提醒' : '请用户核对')),
+      h('p', { className: 'ko-safety' }, '未修改原生记忆。请核对后自行决定是否删除；自动保存不授权删除。'),
       ...(data.items ?? []).map(item => h('article', { className: 'knowstack-item', key: item.memoryId },
         h('strong', null, item.title || '未命名记忆'),
-        h('p', { className: 'ko-original' }, item.content),
-        h('p', null, '原因：', item.reason), h('p', null, '依据（模型提供，请核对）：', item.evidence),
+        final ? controls(item) : null,
+        final ? h('details', null, h('summary', null, '查看原记忆'), h('p', { className: 'ko-original' }, item.content)) : h('p', { className: 'ko-original' }, item.content),
+        h('p', null, '原因：', item.reason),
+        final ? h('details', null, h('summary', null, '依据（模型提供，请核对）'), h('p', null, item.evidence)) : h('p', null, '依据（模型提供，请核对）：', item.evidence),
         h('small', null, ITEM_LABELS[item.state] ?? '仅提醒 · 尚未删除'),
-        item.state === 'pending' && data.status === 'reported' ? h('div', { className: 'knowstack-actions' },
-          h('button', { type: 'button', disabled: busy || !verified, onClick: () => act('open', item.memoryId) }, '打开记忆并定位'),
-          h('button', { type: 'button', disabled: busy || !verified, onClick: () => act('dismiss', item.memoryId) }, '本次忽略')) : null)),
+        final ? null : controls(item))),
       h('small', { className: 'ko-context' }, '提醒操作有效期 15 分钟，重载插件后失效；不建立第二套记忆库。'),
       data.errorCode ? h('p', { role: 'alert' }, `提醒不可用：${data.errorCode}。请重新读取检查，未执行删除。`) : null,
       error ? h('p', { role: 'alert' }, error) : null);
+  };
+}
+
+// The final-answer slot supplies the originating session, unlike fenced block renderers.
+// Only an exact standalone receipt marker is accepted; text never becomes report data.
+export function finalReminderIds(message) {
+  if (message?.role !== 'assistant') return [];
+  const text = typeof message.content === 'string' ? message.content : Array.isArray(message.content)
+    ? message.content.filter(part => part?.type === 'text' && typeof part.text === 'string').map(part => part.text).join('\n')
+    : typeof message.text === 'string' ? message.text : '';
+  const ids = []; let fence = null;
+  for (const line of text.split(/\r?\n/)) {
+    const delimiter = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (delimiter) {
+      if (!fence) fence = delimiter[1];
+      else if (delimiter[1][0] === fence[0] && delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null;
+      continue;
+    }
+    if (fence) continue;
+    const match = /^<!-- knowstack-outdated:([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}) -->$/.exec(line);
+    if (match && !ids.includes(match[1])) ids.push(match[1]);
+    if (ids.length === 3) break;
+  }
+  return ids;
+}
+
+export function makeOutdatedEntry(React, call, openEditor) {
+  const Card = makeOutdatedCard(React, call, openEditor);
+  return function OutdatedEntry(props) {
+    if (!props.sessionId || !props.messageId || props.message?.id !== props.messageId) return null;
+    const ids = finalReminderIds(props.message);
+    if (!ids.length) return null;
+    return React.createElement('div', { className: 'knowstack-final-reminders' }, ...ids.map(reportId => React.createElement(Card, {
+      key: `${props.sessionId}:${reportId}`, sessionId: props.sessionId, toolStatus: 'success', placement: 'final',
+      toolResult: { status: 'reported', reportId, sessionId: props.sessionId, items: [] },
+    })));
   };
 }
 

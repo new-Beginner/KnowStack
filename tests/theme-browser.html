@@ -1,0 +1,51 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>KnowStack主题回归</title><style>
+body{margin:0;padding:24px;background:var(--ds-bg-primary,#f5f7fa);color:var(--ds-text-primary,#193a51);font:14px/1.5 system-ui}main{max-width:520px}iframe{position:fixed;right:0;top:0;width:420px;height:900px;border:0;background:var(--ds-bg-primary,#fff)}#layers{position:fixed;inset:0;pointer-events:none}pre{white-space:pre-wrap}
+</style></head><body><main><h1>知栈 · 主题回归</h1><p>正式组件、模拟记忆，不调用真实模型或保存记忆。</p><section class="knowstack-memory" id="memory-card"><div class="knowstack-head"><strong>知栈</strong><span data-state="saved">已保存</span></div><div class="knowstack-item"><strong>项目约束</strong><p>记忆存储与模型配置不因主题变化而改变。</p></div><label class="knowstack-mode"><input type="checkbox" checked>本项目自动保存</label></section><section class="knowstack-memory knowstack-outdated knowstack-outdated-final" id="reminder"><div class="knowstack-head"><strong>待核对的记忆</strong></div><p class="ko-badge">请核对适用条件</p><span class="ko-icon">!</span><div class="knowstack-actions"><button>查看记忆</button></div></section><pre id="results">加载中</pre></main><iframe id="dock" src="../renderer/memory-view.html"></iframe><div id="layers"></div><script type="module">
+import {bootMemoryView} from '../renderer/memory-view.mjs';
+import {MEMORY_CSS} from '../renderer/memory-ui.mjs';
+import {SETTINGS_CSS,mountSettings} from '../renderer/settings-ui.mjs';
+import {OUTDATED_CSS} from '../renderer/outdated-ui.mjs';
+let THEME_CSS='';try{({THEME_CSS}=await import('../renderer/theme.mjs'));}catch{}
+const fixtures=await(await fetch('./theme-fixtures.json')).json();
+const source=await(await fetch('../renderer/knowstack.mjs')).text();const template=source.match(/pi\.ui\.injectStyle\(`([\s\S]*?)`\)\)/)?.[1];if(!template)throw Error('Production style template not found');
+const compile=withTheme=>template.replace(/\$\{(\w+)\}/g,(_,key)=>{const values={MEMORY_CSS,SETTINGS_CSS,OUTDATED_CSS,THEME_CSS:withTheme?THEME_CSS:''};if(!(key in values))throw Error('Unknown style interpolation '+key);return values[key];});
+const productionStyle=document.createElement('style');productionStyle.id='production-style';productionStyle.textContent=compile(true);document.head.append(productionStyle);
+const hostTheme=document.createElement('style');document.head.append(hostTheme);
+let settingsWrites=0,writes=0;const settings={loaded:true,busy:false,autoSave:true,autoDelete:false,projects:[{name:'知栈主题测试',path:'D:/Mock/KnowStack',autoSave:true,autoDelete:false},{name:'另一测试项目',path:'D:/Mock/Other',autoSave:false,autoDelete:false}],message:'',error:''};
+const unmountSettings=mountSettings(document.getElementById('layers'),{subscribe(fn){fn(settings);return()=>{};},refresh:async()=>settings,setDefault(){settingsWrites++;},setProject(){settingsWrites++;}},()=>{},document);
+const backdrop=document.querySelector('.knowstack-settings-backdrop');backdrop.style.display='none';
+const frame=document.getElementById('dock');if(!frame.contentDocument?.getElementById('memory-root'))await new Promise(r=>frame.onload=r);const d=frame.contentDocument,listeners=new Map();let appearance={theme:'plugin:'+fixtures[0].id,base:fixtures[0].base,locale:'zh-CN',pluginTheme:{...fixtures[0]}};
+const entries=[{id:'one',title:'长期项目约束',content:'保留原生记忆存储，主题切换不修改条目。'},{id:'two',title:'资料索引',content:'资料位于项目docs目录，保留必要的适用条件。'}];
+const bridge={on(event,fn){if(!listeners.has(event))listeners.set(event,new Set());listeners.get(event).add(fn);return()=>listeners.get(event).delete(fn);},async invoke(channel,args){if(channel==='app.getAppearance')return appearance;if(channel==='memory.context')return{sessionId:'a',projectPath:'D:/Mock/KnowStack'};if(channel==='memory.mode')return{autoSave:true,autoDelete:false};if(channel==='memory.editor'){if(args.action==='save')writes++;return{status:'read',readToken:'t',project:{key:'a',name:'知栈主题测试',path:'d:/mock/knowstack'},entries:structuredClone(entries)};}throw Error('Unexpected channel '+channel);}};
+const view=await bootMemoryView(bridge,d);const pause=()=>new Promise(r=>setTimeout(r,10));for(let i=0;i<300&&(!view.editor.getState().loaded||view.editor.getState().busy);i++)await pause();
+const startup={theme:d.documentElement.dataset.theme,css:!!d.getElementById('knowstack-host-theme')?.textContent};
+const tick=()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+const paint=(value,property='backgroundColor')=>{const n=document.createElement('span');n.style.visibility='hidden';n.style.position='fixed';n.style[property]=value.startsWith('--')?`var(${value})`:value;document.body.append(n);const result=getComputedStyle(n)[property];n.remove();return result;};
+const assert=(ok,message)=>{if(!ok)throw Error(message);};
+const eq=(doc,selector,property,token)=>{const node=doc.querySelector(selector);assert(node,'Missing '+selector);const got=doc.defaultView.getComputedStyle(node)[property],expected=paint(token,property);assert(got===expected,selector+'/'+property+': '+got+' != '+expected);};
+const apply=async(theme,base=theme?.base||'light')=>{appearance={theme:theme?'plugin:'+theme.id:base,base,locale:'zh-CN',pluginTheme:theme?{id:theme.id,base,css:theme.css}:null};document.documentElement.dataset.theme=base;hostTheme.textContent=theme?.css||'';for(const fn of listeners.get('appearance:changed')||[])fn(appearance);await tick();};
+const business=()=>JSON.stringify({state:view.editor.getState(),entries:[...d.querySelectorAll('input,textarea')].map(n=>n.value),settings,writes,settingsWrites});
+window.runThemeTests=async width=>{
+ frame.style.width=width+'px';frame.style.display='block';backdrop.style.display='none';const initial=business(),rows=[];const check=async(name,fn)=>{try{await fn();rows.push({name,passed:true});}catch(error){rows.push({name,passed:false,error:error.message});}};
+ await check('冷启动应用宿主主题CSS及选择器',()=>assert(startup.theme==='light'&&startup.css,'Host theme CSS/data-theme not applied at boot'));
+ for(const theme of fixtures){await apply(theme);
+  await check(theme.label+' 侧栏背景文字和条目',()=>{eq(d,'body','backgroundColor','--ds-bg-dock');eq(d,'.knowstack-editor','color','--ds-text-primary');eq(d,'.km-path','color','--ds-text-secondary');eq(d,'.km-item','backgroundColor','--ds-bg-secondary');eq(d,'textarea','backgroundColor','--ds-bg-tertiary');});
+  await check(theme.label+' 侧栏按钮和边框',()=>{eq(d,'.km-save','backgroundColor','--ds-accent');eq(d,'.km-save','color','--ds-bg-primary');eq(d,'[aria-label="自动保存新记忆"]','backgroundColor','--ds-accent');eq(d,'.km-item','borderTopColor','--ds-border-default');eq(d,'footer','borderTopColor','--ds-border-default');});
+  await check(theme.label+' 设置背景文字按钮边框',()=>{eq(document,'.knowstack-settings','backgroundColor','--ds-bg-elevated-opaque');eq(document,'.knowstack-settings','color','--ds-text-primary');eq(document,'.ks-default','backgroundColor','--ds-bg-secondary');eq(document,'.ks-done','backgroundColor','--ds-accent');eq(document,'.ks-done','color','--ds-bg-primary');eq(document,'.ks-project','borderBottomColor','--ds-border-default');});
+  await check(theme.label+' 记忆卡片及提醒',()=>{eq(document,'#memory-card','borderLeftColor','--ds-accent');eq(document,'[data-state=saved]','color','--ds-success');eq(document,'#reminder','backgroundColor','--ds-bg-secondary');eq(document,'#reminder','borderLeftColor','--ds-warning');eq(document,'.ko-icon','color','--ds-warning');});
+  await check(theme.label+' 无记忆写入或草稿变化',()=>assert(business()===initial,'Theme altered business state'));
+ }
+ const light=fixtures.find(t=>t.base==='light');await apply(light);const updated={...light,css:light.css.replace('#356c45','#456c35')};assert(updated.css.length===light.css.length&&updated.css!==light.css,'Bad equal-length fixture');await apply(updated);
+ await check('同一主题等长CSS实时更新',()=>{eq(d,'.km-save','backgroundColor','--ds-accent');assert(d.defaultView.getComputedStyle(d.querySelector('.km-save')).backgroundColor==='rgb(69, 108, 53)','Updated CSS ignored');});
+ for(const base of ['dark','light']){await apply(null,base);const memoryStyle=[...d.head.querySelectorAll('style')].find(s=>s.textContent.startsWith(MEMORY_CSS.slice(0,40)));assert(memoryStyle,'Memory style missing');
+  const snapshot=()=>JSON.stringify([...[['.knowstack-settings','backgroundColor'],['.ks-default','backgroundColor'],['.ks-done','backgroundColor'],['.ks-done','color'],['.ks-switch','backgroundColor'],['.ks-switch span','backgroundColor'],['#memory-card','borderLeftColor'],['#reminder','borderLeftColor']].map(([s,p])=>getComputedStyle(document.querySelector(s))[p]),...[['body','backgroundColor'],['.knowstack-editor','color'],['.km-item','backgroundColor'],['textarea','backgroundColor'],['.km-save','backgroundColor'],['.km-save','color'],['.km-mode-switch','backgroundColor']].map(([s,p])=>d.defaultView.getComputedStyle(d.querySelector(s))[p])]);
+  productionStyle.textContent=compile(false);memoryStyle.textContent=MEMORY_CSS;const old=snapshot();productionStyle.textContent=compile(true);memoryStyle.textContent=MEMORY_CSS+THEME_CSS;const current=snapshot();
+  await check(base+' 无宿主变量时保留原默认色',()=>assert(old===current,'Fallback colours changed'));
+ }
+ await check('仅知栈作用域和原业务状态',()=>{assert(!THEME_CSS.includes(':root'),'Global theme mutation');assert(business()===initial,'Business state changed');});
+ const result={width,passed:rows.filter(r=>r.passed).length,failed:rows.filter(r=>!r.passed).length,rows};document.getElementById('results').textContent=JSON.stringify(result,null,2);return result;
+};
+window.previewTheme=async(id,surface,width)=>{await apply(fixtures.find(t=>t.id===id));frame.style.width=width+'px';const showSettings=surface==='settings';backdrop.style.display=showSettings?'grid':'none';frame.style.display=showSettings?'none':'block';await tick();return(showSettings?document.querySelector('.knowstack-settings'):frame).getBoundingClientRect().toJSON();};
+window.finishThemeTests=()=>{view.stop();unmountSettings();assert(!d.getElementById('knowstack-host-theme'),'Theme CSS leaked after stop');assert(!d.getElementById('memory-root').children.length,'Editor leaked');return true;};
+window.themeFixtures=fixtures;
+</script></body></html>

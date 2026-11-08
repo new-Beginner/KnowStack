@@ -10,17 +10,27 @@ import {createProjectController} from '../renderer/project-controls.mjs';
 import {installSettingsEntry,SETTINGS_CSS} from '../renderer/settings-ui.mjs';
 const style=document.createElement('style');style.textContent=SETTINGS_CSS;document.head.append(style);
 const sample=[{name:'KnowStack',roots:[{path:'D:/Projects/KnowStack'}]},{name:'泥石流数值模拟',roots:[{path:'D:/Research/DebrisFlow'}]},{name:'论文写作',roots:[{path:'D:/Research/Manuscript'}]}];
-let groups=structuredClone(sample),autoSave=true,modes={'d:/research/manuscript':false},projects=[],failSave=false,failScan=false,nativeSettingsOpened=0;
-const view=()=>({autoSave,projects:projects.map(p=>({...p,autoSave:modes[p.path]}))});
+let groups=structuredClone(sample),autoSave=true,autoDelete=false,modes={'d:/research/manuscript':false},deleteModes={},projects=[],failSave=false,failScan=false,nativeSettingsOpened=0;
+const view=()=>({autoSave,autoDelete,projects:projects.map(p=>({...p,autoSave:modes[p.path],autoDelete:deleteModes[p.path]}))});
 const bridge={channels:{invoke:{projectGroupList:'groups'}},invoke:async()=>{if(failScan)throw Error('offline');return{ok:true,data:{groups:structuredClone(groups)}};}};
 const controller=createProjectController({bridge,call:async(method,args)=>{
  if(method!=='projects')throw Error('Unexpected method');
  if(args.action==='sync'){
-  projects=args.projects;const next={};for(const p of projects)for(const path of p.paths)next[path]=modes[p.path]??autoSave;modes=next;
+  projects=args.projects;const next={};const nextDelete={};
+  for(const p of projects)for(const path of p.paths){next[path]=modes[p.path]??autoSave;nextDelete[path]=deleteModes[p.path]??autoDelete;}
+  modes=next;deleteModes=nextDelete;
  }else{
   await new Promise(resolve=>setTimeout(resolve,20));if(failSave)throw Error('refused');
-  if(args.action==='default')autoSave=args.autoSave;
-  else if(args.action==='set'){const p=projects.find(p=>p.path===args.path);if(!p)throw Error('deleted');for(const path of p.paths)modes[path]=args.autoSave;}
+  if(args.action==='default'){
+    if(args.autoSave!==undefined)autoSave=args.autoSave;
+    if(args.autoDelete!==undefined)autoDelete=args.autoDelete;
+  }else if(args.action==='set'){
+    const p=projects.find(p=>p.path===args.path);if(!p)throw Error('deleted');
+    for(const path of p.paths){
+      if(args.autoSave!==undefined)modes[path]=args.autoSave;
+      if(args.autoDelete!==undefined)deleteModes[path]=args.autoDelete;
+    }
+  }
  }
  return view();
 }});
@@ -36,16 +46,25 @@ window.runBrowserTests=async()=>{
  const passed=[];const run=async(name,fn)=>{await fn();passed.push(name);};
  try{
   await controller.refresh();close();
-  await run('插件页设置按钮打开专用弹窗，不打开原生表单',async()=>{document.getElementById('settings').focus();document.getElementById('settings').click();check(document.querySelector('[role=dialog]'),'dialog absent');check(nativeSettingsOpened===0,'native form was opened');check(document.querySelectorAll('[role=switch]').length===4,'wrong switch count');check(!document.querySelector('input,textarea'),'raw field present');});
+  await run('当前宿主 controls 容器打开项目列表，更多菜单不被拦截',async()=>{const button=document.getElementById('settings');const actions=button.parentElement;actions.className='plugins-row-controls';const more=actions.querySelector('[aria-haspopup]');let menus=0;more.addEventListener('click',()=>menus++,{once:true});more.click();check(menus===1&&!document.querySelector('[role=dialog]'),'menu intercepted');button.click();check(document.querySelectorAll('.ks-project').length===3,'current host project list absent');check(nativeSettingsOpened===0,'current host opened native settings');close();actions.className='plugins-row-actions';});
+  await run('插件页设置按钮打开专用弹窗，不打开原生表单',async()=>{document.getElementById('settings').focus();document.getElementById('settings').click();check(document.querySelector('[role=dialog]'),'dialog absent');check(nativeSettingsOpened===0,'native form was opened');check(document.querySelectorAll('[role=switch]').length===8,'wrong switch count');check(!document.querySelector('input,textarea'),'raw field present');});
   await run('宿主零尺寸弹层内遮罩覆盖视口且开关可命中',async()=>{const layer=document.querySelector('[data-pi-layer]');const box=layer.getBoundingClientRect();check(box.width===0&&box.height===0,'fixture must match zero-size host');const backdrop=document.querySelector('.knowstack-settings-backdrop');const rect=backdrop.getBoundingClientRect();check(rect.width>=innerWidth&&rect.height>=innerHeight&&rect.x===0&&rect.y===0,'backdrop does not cover viewport '+JSON.stringify({width:rect.width,height:rect.height,innerWidth,innerHeight}));const button=document.querySelector('[data-ks-key="default"]');const b=button.getBoundingClientRect();check(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)?.closest('button')===button,'switch cannot receive pointer');});
   await run('项目名在左、开关在右，旧关闭值保留',async()=>{const row=[...document.querySelectorAll('.ks-project')].find(r=>r.textContent.includes('论文写作'));check(row.querySelector('[role=switch]').getAttribute('aria-checked')==='false','old choice lost');check(row.querySelector('.ks-copy').getBoundingClientRect().right<=row.querySelector('button').getBoundingClientRect().left,'layout overlap');});
-  await run('点击开关后保存并显示成功，焦点保留',async()=>{const button=document.querySelector('[data-ks-key="default"]');button.focus();button.click();await wait();check(autoSave===false,'default not persisted');check(document.querySelector('.ks-status').textContent==='已保存','missing receipt');check(document.activeElement.dataset.ksKey==='default','focus lost');});
-  await run('新增项目继承关闭默认值，删除项目移除行',async()=>{groups.push({name:'新项目',roots:[{path:'D:/New'}]});await controller.refresh();check(modes['d:/new']===false,'default not inherited');groups=groups.filter(g=>g.name!=='新项目');await controller.refresh();check(!document.querySelector('.ks-list').textContent.includes('新项目'),'deleted row retained');});
-  await run('失败不会假装保存；项目读取失败不清空列表',async()=>{failSave=true;const button=document.querySelector('[data-ks-key="d:/projects/knowstack"]');button.click();await wait();check(modes['d:/projects/knowstack']===true,'failed save changed data');check(document.querySelector('[role=alert]'),'missing failure');failSave=false;failScan=true;await controller.refresh().catch(()=>{});check(document.querySelectorAll('.ks-project').length===3,'error cleared list');failScan=false;await controller.refresh();});
+  await run('点击开关后保存并显示成功，焦点保留',async()=>{
+    const button=document.querySelector('[data-ks-key="default"]');button.focus();button.click();await wait();check(autoSave===false,'default not persisted');check(document.querySelector('.ks-status').textContent==='已保存','missing receipt');check(document.activeElement.dataset.ksKey==='default','focus lost');
+    const delDefBtn=document.querySelector('[data-ks-key="default-delete"]');delDefBtn.focus();delDefBtn.click();await wait();check(autoDelete===true,'default autoDelete not persisted');check(document.activeElement.dataset.ksKey==='default-delete','focus lost');
+  });
+  await run('新增项目继承关闭默认值，删除项目移除行',async()=>{groups.push({name:'新项目',roots:[{path:'D:/New'}]});await controller.refresh();check(modes['d:/new']===false,'default not inherited');check(deleteModes['d:/new']===true,'default delete not inherited');groups=groups.filter(g=>g.name!=='新项目');await controller.refresh();check(!document.querySelector('.ks-list').textContent.includes('新项目'),'deleted row retained');});
+  await run('失败不会假装保存；项目读取失败不清空列表',async()=>{
+    failSave=true;const button=document.querySelector('[data-ks-key="d:/projects/knowstack"]');button.click();await wait();check(modes['d:/projects/knowstack']===true,'failed save changed data');check(document.querySelector('[role=alert]'),'missing failure');failSave=false;
+    const delBtn=document.querySelector('[data-ks-key="d:/projects/knowstack:delete"]');delBtn.click();await wait();check(deleteModes['d:/projects/knowstack']===true,'project delete not persisted');
+    failScan=true;await controller.refresh().catch(()=>{});check(document.querySelectorAll('.ks-project').length===3,'error cleared list');failScan=false;await controller.refresh();
+  });
   await run('项目名称按文本展示，不执行 HTML',async()=>{groups.push({name:'<img src=x onerror=alert(1)>',roots:[{path:'D:/Untrusted'}]});await controller.refresh();check(!document.querySelector('.ks-list img'),'HTML executed');groups=structuredClone(sample);await controller.refresh();});
   await run('键盘焦点循环及 Escape 关闭恢复入口焦点',async()=>{const done=document.querySelector('.ks-done');done.focus();done.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true,cancelable:true}));check(document.activeElement.className==='ks-close','tab escaped');document.querySelector('[role=dialog]').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));check(!document.querySelector('[role=dialog]'),'escape failed');check(document.activeElement.id==='settings','entry focus not restored');});
   await run('其他插件设置不受影响，重复打开不叠加',async()=>{document.getElementById('other').click();check(otherOpened===1,'other plugin intercepted');document.getElementById('settings').click();document.getElementById('settings').click();check(document.querySelectorAll('[role=dialog]').length===1,'duplicate layer');});
   await run('长列表保持在视口内并可滚动，名称与开关不重叠',async()=>{await controller.refresh();groups=Array.from({length:60},(_,i)=>({name:'长项目名称用于检查窄屏自动换行'+i,roots:[{path:'D:/Research/LongProjectDirectory/Case'+i}]}));await controller.refresh();const dialog=document.querySelector('[role=dialog]');const rect=dialog.getBoundingClientRect();const body=dialog.querySelector('.ks-body');check(rect.left>=0&&rect.right<=innerWidth&&rect.top>=0&&rect.bottom<=innerHeight,'dialog overflow');check(body.scrollHeight>body.clientHeight,'list not scrollable '+JSON.stringify({scroll:body.scrollHeight,client:body.clientHeight,overflow:getComputedStyle(body).overflowY,dialog:rect.height,viewport:innerHeight,connected:body.isConnected}));const row=dialog.querySelector('.ks-project');check(row.querySelector('.ks-copy').getBoundingClientRect().right<=row.querySelector('button').getBoundingClientRect().left,'switch overlap');groups=structuredClone(sample);await controller.refresh();});
+  await run('向下滚动后同步不被顶部开关焦点拉回',async()=>{groups=Array.from({length:60},(_,i)=>({name:'滚动项目'+i,roots:[{path:'D:/Scroll/Case'+i}]}));await controller.refresh();document.querySelector('[data-ks-key="default"]').focus();const body=document.querySelector('.ks-body');body.scrollTop=600;const expected=body.scrollTop;check(expected>100,'fixture did not scroll');for(let i=0;i<3;i++){await controller.refresh();check(Math.abs(document.querySelector('.ks-body').scrollTop-expected)<=1,'sync jumped back to focused top control');check(document.activeElement.dataset.ksKey==='default','keyboard focus lost');}groups=structuredClone(sample);await controller.refresh();});
   const result={passed:passed.length,failed:0,tests:passed};document.getElementById('results').textContent=JSON.stringify(result,null,2);return result;
  }catch(error){const result={passed:passed.length,failed:1,error:error.message,tests:passed};document.getElementById('results').textContent=JSON.stringify(result,null,2);return result;}
 };

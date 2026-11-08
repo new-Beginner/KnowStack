@@ -1,4 +1,5 @@
 import { normalizePath, snapshot, entryStamp } from './native-memory.mjs';
+import { callHost, HOST_CODES } from './host-call.mjs';
 
 const fail = code => Object.assign(new Error(code), { code });
 const copy = entries => entries.map(({ id, title, content }) => ({ id, title, content }));
@@ -30,16 +31,7 @@ export function createMemoryAccess(bridge) {
     tail = pending.catch(() => {});
     return pending;
   };
-  const call = async (key, input) => {
-    if (stopped) throw fail('UNLOADED');
-    const channel = bridge?.channels?.invoke?.[key];
-    if (typeof channel !== 'string' || typeof bridge?.invoke !== 'function') throw fail('BRIDGE_UNAVAILABLE');
-    let result;
-    try { result = await bridge.invoke(channel, input); } catch { throw fail('HOST_CALL_FAILED'); }
-    if (stopped) throw fail('UNLOADED');
-    if (result?.ok !== true || !Object.hasOwn(result, 'data')) throw fail('HOST_CALL_FAILED');
-    return result.data;
-  };
+  const call = (key, input) => callHost(bridge, key, input, { guard: () => { if (stopped) throw fail('UNLOADED'); } });
   const projects = async () => {
     const value = await call('projectGroupList');
     if (!Array.isArray(value?.groups)) throw fail('INVALID_PROJECT_LIST');
@@ -129,7 +121,7 @@ export function createMemoryAccess(bridge) {
           if (entryStamp(after.entries) !== entryStamp(clean)) throw fail('READ_BACK_MISMATCH');
           return { status: 'saved', basis: { project: target, ...after } };
         } catch (error) {
-          return { status: attempted ? 'unverified' : 'failed', errorCode: MEMORY_ERRORS[error?.code] ? error.code : 'HOST_CALL_FAILED' };
+          return { status: attempted ? 'unverified' : 'failed', errorCode: MEMORY_ERRORS[error?.code] || HOST_CODES.has(error?.code) ? error.code : 'HOST_CALL_FAILED', errorStep: error?.step };
         }
       });
     },
@@ -137,6 +129,11 @@ export function createMemoryAccess(bridge) {
   };
 }
 
+function memoryMessage(error) {
+  const code = error?.code;
+  const step = ['sessionGet','projectGroupList','projectGroupMemoryGet','projectMemoryGet','projectGroupMemorySave','projectMemorySave'].includes(error?.step) ? error.step : '';
+  return (MEMORY_ERRORS[code] ?? MEMORY_ERRORS.HOST_CALL_FAILED) + ((HOST_CODES.has(code) || step) ? ` [${HOST_CODES.has(code) ? code : 'HOST_CALL_FAILED'}${step ? ` · ${step}` : ''}]` : '');
+}
 export function createMemoryEditor(access, { context, reminder } = {}) {
   let state = { projects: [], projectKey: '', entries: [], loaded: false, busy: false, dirty: false, needsRefresh: false, error: '', message: '', following: !!context, pinned: !!reminder, highlightId: reminder?.memory?.id };
   let basis = null; let selection = null; let stopped = false; let pendingFollow = false; let checkedReminder = false;
@@ -173,7 +170,7 @@ export function createMemoryEditor(access, { context, reminder } = {}) {
       publish({ projects, projectKey: target?.key ?? '', entries: copy(next?.entries ?? []), loaded: true, dirty: false, needsRefresh: false });
     } catch (error) {
       const cleared = context && !state.dirty && !isCurrent(selection) ? { loaded: false, entries: [], projectKey: '' } : {};
-      publish({ ...cleared, error: MEMORY_ERRORS[error?.code] ?? MEMORY_ERRORS.HOST_CALL_FAILED, needsRefresh: true });
+      publish({ ...cleared, error: memoryMessage(error), needsRefresh: true });
     } finally {
       publish({ busy: false });
       if (pendingFollow) { pendingFollow = false; follow(); }
@@ -207,7 +204,7 @@ export function createMemoryEditor(access, { context, reminder } = {}) {
         if (result.status === 'saved') {
           basis = result.basis;
           publish({ entries: copy(basis.entries), dirty: false, message: '已保存记忆 · 回读验证成功' });
-        } else publish({ error: `${MEMORY_ERRORS[result.errorCode] ?? MEMORY_ERRORS.HOST_CALL_FAILED}${result.status === 'unverified' ? ' 保存可能已发生，结果待确认。' : ''}`, needsRefresh: result.errorCode !== 'INVALID_ENTRIES' });
+        } else publish({ error: `${memoryMessage({code:result.errorCode,step:result.errorStep})}${result.status === 'unverified' ? ' 保存可能已发生，结果待确认。' : ''}`, needsRefresh: result.errorCode !== 'INVALID_ENTRIES' });
       } catch { publish({ error: '保存结果待确认，请重新读取并核对，不要重复提交。', needsRefresh: true }); }
       finally {
         publish({ busy: false });

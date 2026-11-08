@@ -5,8 +5,9 @@ import { createProjectController } from './project-controls.mjs';
 import { installSettingsEntry, SETTINGS_CSS } from './settings-ui.mjs';
 import { createMemoryAccess } from './memory-editor.mjs';
 import { installMemoryEntry, MEMORY_CSS } from './memory-ui.mjs';
-import { makeOutdatedCard, createReminderEditor, OUTDATED_CSS } from './outdated-ui.mjs';
-const VERSION = '0.5.0';
+import { makeOutdatedCard, makeOutdatedEntry, createReminderEditor, OUTDATED_CSS } from './outdated-ui.mjs';
+import { THEME_CSS } from './theme.mjs';
+const VERSION = '0.6.3';
 const h = React.createElement;
 let runtime;
 
@@ -17,11 +18,16 @@ export function makeCard(pi, call, projectController) {
     const [mode, setMode] = React.useState(null);
     const [busy, setBusy] = React.useState(false);
     const [error, setError] = React.useState('');
+    const [modeError, setModeError] = React.useState('');
     const batchId = initial?.batchId;
     React.useEffect(() => { setState(initial); }, [props.toolResult]);
     React.useEffect(() => {
       let cancelled = false;
-      const refresh = () => call('mode', { sessionId: props.sessionId, action: 'get' }).then(v => { if (!cancelled) setMode(v.autoSave); }).catch(() => { if (!cancelled) setError('无法读取项目开关，请检查会话归属和权限。'); });
+      setMode(null); setModeError('');
+      if (props.toolStatus !== 'success' || !props.sessionId || (initial?.sessionId && initial.sessionId !== props.sessionId)) return () => { cancelled = true; };
+      const refresh = () => call('mode', { sessionId: props.sessionId, action: 'get' }).then(v => {
+        if (!cancelled) { setMode(typeof v?.autoSave === 'boolean' ? v.autoSave : null); setModeError(typeof v?.autoSave === 'boolean' ? '' : '无法核对项目开关，请重新读取。'); }
+      }).catch(() => { if (!cancelled) { setMode(null); setModeError('无法读取项目开关，请检查会话归属和权限。'); } });
       void refresh();
       let signature;
       const unsubscribe = projectController?.subscribe(value => {
@@ -30,7 +36,7 @@ export function makeCard(pi, call, projectController) {
         signature = next;
       });
       return () => { cancelled = true; unsubscribe?.(); };
-    }, [props.sessionId]);
+    }, [props.sessionId, props.toolStatus, initial?.sessionId]);
     React.useEffect(() => {
       if (!batchId || !['awaiting_review', 'saving'].includes(state?.status)) return;
       let cancelled = false;
@@ -67,15 +73,17 @@ export function makeCard(pi, call, projectController) {
         h('span', { role: 'status', 'data-state': data.status }, STATUS_LABELS[data.status] ?? '操作状态待确认')),
       data.status === 'read' ? h('p', null, `已读取 ${data.entries?.length ?? 0} 条；只提炼尚未被覆盖的新结论。`) : null,
       ...items.map((item, index) => h('div', { className: 'knowstack-item', key: item.id ?? index }, h('strong', null, item.title), h('p', null, item.content))),
-      (data.skipped ?? []).some(x => x.reason === 'existing_topic') ? h('p', null, '已有同主题记忆，本版不自动改写旧条目。') : null,
-      data.errorCode ? h('p', { role: 'alert' }, `状态码：${data.errorCode}。未保存或结果待确认，请先核对原生记忆。`) : null,
+      (data.skipped ?? []).some(x => x.reason === 'existing_topic') ? h('p', null, '已有同主题记忆。事实变化请按原 ID 修改，不要追加冲突条目。') : null,
+      data.status === 'updated' ? h('p', null, `已更新 ${data.updated?.length ?? 0} 条原有记忆，ID 保持不变。`) : null,
+      data.status === 'deleted' ? h('p', null, `已删除 ${data.deleted?.length ?? 0} 条经证据确认的旧记忆。`) : null,
+      data.errorCode ? h('p', { role: 'alert' }, `状态码：${data.errorCode}${data.errorStep ? ` · ${data.errorStep}` : ''}。${data.status === 'read' || initial?.entries ? '读取未确认。' : '操作未完成或结果待确认。'}请核对原生记忆。`) : null,
       data.status === 'awaiting_review' ? h('div', { className: 'knowstack-actions' },
         h('button', { type: 'button', disabled: busy, onClick: () => act('approve') }, busy ? '处理中…' : '保存这些记忆'),
         h('button', { type: 'button', disabled: busy, onClick: () => act('reject') }, '不保存')) : null,
       h('label', { className: 'knowstack-mode' },
         h('input', { type: 'checkbox', checked: mode === true, disabled: busy || mode === null, onChange: toggle }), '本项目自动保存'),
-      h('small', null, mode === true ? '已开启：新记忆直接写入；不自动修改或删除旧记忆。' : '已关闭：需在卡片中确认，未确认不写入。'),
-      error ? h('p', { role: 'alert' }, error) : null);
+      h('small', null, mode === null ? (modeError ? '自动保存状态未确认，未判定为关闭。' : '正在核对项目自动保存状态…') : mode === true ? '已开启：只自动保存长期有效的新知识；修改始终可用，模型删除由独立开关控制。' : '已关闭：新记忆需确认；修改始终可用，模型删除由独立开关控制。'),
+      error || modeError ? h('p', { role: 'alert' }, error || modeError) : null);
   };
 }
 
@@ -99,7 +107,6 @@ export async function onLoad(pi) {
     projectController = createProjectController({ bridge: globalThis.piDesktop, call });
     state.disposers.push(() => projectController.stop());
     state.disposers.push(installSettingsEntry(pi, projectController));
-    state.disposers.push(installMemoryEntry(pi, memoryAccess));
   }
   const component = makeCard(pi, call, projectController);
   state.disposers.push(pi.ui.injectStyle(`
@@ -113,19 +120,22 @@ export async function onLoad(pi) {
 ${SETTINGS_CSS}
 ${MEMORY_CSS}
 ${OUTDATED_CSS}
+${THEME_CSS}
 `));
-  for (const toolName of ['read_memory', 'remember']) state.disposers.push(pi.slots.register({ slot: 'toolCard', toolName, component }));
-  state.disposers.push(pi.slots.register({ slot: 'toolCard', toolName: 'report_outdated_memory', component: makeOutdatedCard(React, call, (target, onClose) => {
+  for (const toolName of ['read_memory', 'remember', 'update_memory', 'delete_memory']) state.disposers.push(pi.slots.register({ slot: 'toolCard', toolName, component }));
+  const openReminder = (target, onClose) => {
     if (!reminderEditor) throw new Error('Renderer document unavailable');
     return reminderEditor.open(target, onClose);
-  }) }));
+  };
+  state.disposers.push(pi.slots.register({ slot: 'toolCard', toolName: 'report_outdated_memory', component: makeOutdatedCard(React, call, openReminder) }));
+  state.disposers.push(pi.slots.register({ slot: 'entryExtra', component: makeOutdatedEntry(React, call, openReminder) }));
   const poll = async () => {
     if (state.stopped || state.busy) return;
     state.busy = true;
     try {
       const job = await call('next');
       if (!job || state.stopped) return;
-      const result = await memoryAccess.run(() => runNativeJob(globalThis.piDesktop, job, { isStopped: () => state.stopped }));
+      const result = await memoryAccess.run(() => runNativeJob(globalThis.piDesktop, job, { isStopped: () => state.stopped, authorize: async job => (await call('authorize', { id: job.id })).allowed }));
       if (!state.stopped) await call('report', { id: job.id, result });
     } catch { /* The waiting tool times out safely; do not retry a native write or expose private host errors. */ }
     finally { state.busy = false; }

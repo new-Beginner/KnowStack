@@ -56,7 +56,7 @@ let ws;
     for (const name of ['outdated-card', 'outdated-editor']) {
       if (name === 'outdated-editor') await evaluate('window.testApp.screenshotEditor()');
       const shot = await call('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
-      fs.writeFileSync(path.join(directory, `${name}-0.5.0${width < 500 ? '-narrow' : ''}.png`), Buffer.from(shot.data, 'base64'));
+      fs.writeFileSync(path.join(directory, `${name}-0.5.1${width < 500 ? '-narrow' : ''}.png`), Buffer.from(shot.data, 'base64'));
     }
     await evaluate('document.querySelector(".km-cancel").click(); document.getElementById("chat").focus();');
     await call('Input.insertText', { text: '提醒关闭后可以输入' });

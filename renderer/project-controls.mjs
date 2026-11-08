@@ -26,8 +26,8 @@ export async function scanProjects(bridge) {
 }
 
 export function createProjectController({ bridge, call, schedule = setInterval, unschedule = clearInterval }) {
-  let stopped = false; let pending = null; let changing = false;
-  let state = { autoSave: true, projects: [], loaded: false, busy: false, error: '', message: '' };
+  let stopped = false; let pending = null;
+  let state = { autoSave: true, autoDelete: false, projects: [], loaded: false, busy: false, error: '', message: '' };
   const listeners = new Set();
   const publish = patch => {
     if (stopped) return;
@@ -51,31 +51,53 @@ export function createProjectController({ bridge, call, schedule = setInterval, 
     })();
     return pending;
   };
-  const change = async args => {
-    if (stopped || changing) return;
-    changing = true; publish({ busy: true, error: '', message: '' });
-    try {
-      // Also validates that a project still exists before accepting a UI toggle.
-      await refresh();
-      if (stopped) return;
-      const value = await call('projects', args);
-      publish({ ...value, loaded: true, message: '已保存' });
-    } catch {
-      publish({ error: '设置未能确认保存。请刷新核对后再操作。', message: '' });
-    } finally { changing = false; publish({ busy: false }); }
+
+  let changeQueue = Promise.resolve();
+  const inFlight = new Map();
+
+  const change = args => {
+    if (stopped) return Promise.reject(new Error('Plugin unloaded'));
+    const opKey = JSON.stringify(args);
+    if (inFlight.has(opKey)) return inFlight.get(opKey);
+
+    const execute = async () => {
+      if (stopped) return state;
+      publish({ busy: true, error: '', message: '' });
+      try {
+        // Also validates that a project still exists before accepting a UI toggle.
+        await refresh();
+        if (stopped) return state;
+        const value = await call('projects', args);
+        publish({ ...value, loaded: true, message: '已保存' });
+        return value;
+      } catch {
+        if (stopped) return state;
+        publish({ error: '设置未能确认保存。请刷新核对后再操作。', message: '' });
+        return state;
+      } finally {
+        inFlight.delete(opKey);
+        if (inFlight.size === 0) publish({ busy: false });
+      }
+    };
+
+    const next = changeQueue.then(execute, execute);
+    changeQueue = next.catch(() => {});
+    inFlight.set(opKey, next);
+    return next;
   };
-  const timer = schedule(() => { if (!changing) void refresh().catch(() => {}); }, 2000);
+
+  const timer = schedule(() => { if (inFlight.size === 0) void refresh().catch(() => {}); }, 2000);
   timer?.unref?.();
   let unsubscribe;
   const changed = bridge?.channels?.event?.sessionsChanged;
-  if (changed && typeof bridge.on === 'function') unsubscribe = bridge.on(changed, () => { if (!changing) void refresh().catch(() => {}); });
+  if (changed && typeof bridge.on === 'function') unsubscribe = bridge.on(changed, () => { if (inFlight.size === 0) void refresh().catch(() => {}); });
   void refresh().catch(() => {});
   return {
     refresh,
     getState: () => state,
     subscribe(listener) { listeners.add(listener); listener(state); return () => listeners.delete(listener); },
-    setDefault: autoSave => change({ action: 'default', autoSave }),
-    setProject: (path, autoSave) => change({ action: 'set', path, autoSave }),
-    stop() { stopped = true; unschedule(timer); unsubscribe?.(); listeners.clear(); },
+    setDefault: (value, key = 'autoSave') => change({ action: 'default', [key]: value }),
+    setProject: (path, value, key = 'autoSave') => change({ action: 'set', path, [key]: value }),
+    stop() { stopped = true; unschedule(timer); unsubscribe?.(); listeners.clear(); inFlight.clear(); },
   };
 }

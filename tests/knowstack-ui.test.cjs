@@ -14,7 +14,8 @@ async function rendererHarness(handler = async method => method === 'mode' ? {au
   const {SETTINGS_CSS}=await import('../renderer/settings-ui.mjs');
   const {createMemoryAccess}=await import('../renderer/memory-editor.mjs');
   const {MEMORY_CSS}=await import('../renderer/memory-ui.mjs');
-  const {makeOutdatedCard,createReminderEditor,OUTDATED_CSS}=await import('../renderer/outdated-ui.mjs');
+  const {THEME_CSS}=await import('../renderer/theme.mjs');
+  const {makeOutdatedCard,makeOutdatedEntry,createReminderEditor,OUTDATED_CSS}=await import('../renderer/outdated-ui.mjs');
   const source=fs.readFileSync(path.join(root,'renderer/knowstack.mjs'),'utf8').replace(/^import .*;\r?\n/gm,'').replace(/^export /gm,'');
   const values=[]; const deps=new Map(); const cleanups=new Map(); const effects=[];
   let cursor=0; const intervals=new Set(); const registrations=[]; let disposed=0; const calls=[];
@@ -23,7 +24,7 @@ async function rendererHarness(handler = async method => method === 'mode' ? {au
     useState(initial){const i=cursor++;if(!(i in values))values[i]=initial;return[values[i],v=>{values[i]=typeof v==='function'?v(values[i]):v;}];},
     useEffect(fn,next){const i=cursor++;const previous=deps.get(i);if(!previous||next.some((v,n)=>v!==previous[n])){deps.set(i,next);effects.push(()=>{cleanups.get(i)?.();cleanups.set(i,fn());});}},
   };
-  const sandbox={module:{exports:{}},React,unwrapResult,STATUS_LABELS,SETTINGS_CSS,MEMORY_CSS,createMemoryAccess,makeOutdatedCard,createReminderEditor,OUTDATED_CSS,
+  const sandbox={module:{exports:{}},React,unwrapResult,STATUS_LABELS,SETTINGS_CSS,MEMORY_CSS,THEME_CSS,createMemoryAccess,makeOutdatedCard,makeOutdatedEntry,createReminderEditor,OUTDATED_CSS,
     runNativeJob:async()=>{throw new Error('No native job expected in UI-only tests');},
     console,
     setInterval(fn,ms){const timer={fn,ms,unref(){}};intervals.add(timer);return timer;},
@@ -42,7 +43,7 @@ async function rendererHarness(handler = async method => method === 'mode' ? {au
   await sandbox.module.exports.onLoad(pi);
   const component=registrations[0].component;
   return {calls,intervals,registrations,
-    render(props, tool='read_memory'){cursor=0;const tree=registrations.find(r=>r.toolName===tool).component(props);while(effects.length)effects.shift()();return tree;},
+    render(props, tool='read_memory'){cursor=0;const registration=registrations.find(r=>tool==='entryExtra'?r.slot===tool:r.toolName===tool);let tree=registration.component(props);const expand=node=>{if(!node||typeof node!=='object')return node;if(typeof node.type==='function')return expand(node.type(node.props));return{...node,children:node.children.map(expand)};};tree=expand(tree);while(effects.length)effects.shift()();return tree;},
     cleanup(){for(const fn of cleanups.values())if(typeof fn==='function')fn();sandbox.module.exports.onUnload();},
     disposed:()=>disposed,
   };
@@ -62,10 +63,11 @@ const props=result=>({sessionId:'a',toolStatus:'success',toolResult:result});
 
 test('renderer loads only new cards, polls no write on load, disposes registrations',async()=>{
   const r=await rendererHarness();
-  assert.deepEqual(r.registrations.map(x=>x.toolName),['read_memory','remember','report_outdated_memory']);
+  assert.deepEqual(r.registrations.filter(x=>x.slot==='toolCard').map(x=>x.toolName),['read_memory','remember','update_memory','delete_memory','report_outdated_memory']);
+  assert.equal(r.registrations.filter(x=>x.slot==='entryExtra').length,1);
   assert.equal(r.calls.some(x=>['review','report'].includes(x.method)),false);
   assert.equal(r.intervals.size,1);await [...r.intervals][0].fn();await tick();
-  assert.equal(r.calls.at(-1).method,'next');r.cleanup();assert.equal(r.intervals.size,0);assert.equal(r.disposed(),4);
+  assert.equal(r.calls.at(-1).method,'next');r.cleanup();assert.equal(r.intervals.size,0);assert.equal(r.disposed(),7);
 });
 test('manual card shows exact content, not success; approve changes only after reply',async()=>{
   const r=await rendererHarness(async(method,args)=>{
@@ -100,6 +102,25 @@ test('per-project checkbox dispatches an explicit persisted mode change',async()
     assert.equal(r.calls.find(x=>x.args.action==='set').args.sessionId,'a');
   }finally{r.cleanup();}
 });
+
+test('unknown or failed auto-save lookup is not presented as disabled',async()=>{
+  const r=await rendererHarness(async()=>{throw Error('offline');});const p=props({status:'read',entries:[],autoSave:true});
+  try{
+    let tree=r.render(p);assert.ok(!text(tree).includes('已关闭'),'pending state is not false');
+    await tick();tree=r.render(p);assert.ok(!text(tree).includes('已关闭'),'failed lookup is not false');
+    assert.equal(nodes(tree,'input')[0].props.disabled,true);assert.match(text(tree),/未确认|无法读取/);
+  }finally{r.cleanup();}
+});
+
+test('tool completion rechecks enabled mode and clears a previous lookup error',async()=>{
+  let available=false;const r=await rendererHarness(async()=>{if(!available)throw Error('not ready');return{autoSave:true};});
+  try{
+    const first=props({status:'read',entries:[]});r.render(first);await tick();assert.match(text(r.render(first)),/无法读取项目开关/);
+    r.render({sessionId:'a',toolStatus:'running'});await tick();available=true;
+    const p=props({status:'read',sessionId:'a',entries:[],autoSave:true});r.render(p);await tick();const tree=r.render(p);
+    assert.equal(nodes(tree,'input')[0].props.checked,true);assert.match(text(tree),/已开启/);assert.ok(!text(tree).includes('无法读取项目开关'));
+  }finally{r.cleanup();}
+});
 test('unverified, errors, empty duplicates, and cross-session results never appear saved',async()=>{
   for(const result of [{status:'unverified',saved:[],skipped:[],errorCode:'HOST_CALL_FAILED'}, {status:'failed',saved:[],skipped:[]}, {status:'skipped',saved:[],skipped:[]}, {...manual,sessionId:'b'}]) {
     const r=await rendererHarness();try{const tree=r.render(props(result));assert.ok(!text(tree).includes('回读验证成功'));if(result.status==='skipped')assert.equal(tree,null);}finally{r.cleanup();}
@@ -116,14 +137,14 @@ test('new main registers only formal tools and forwards trusted context',async()
   const registered=[];const removed=[];const events=[];let stopped=0;
   const source=fs.readFileSync(path.join(root,manifest.main),'utf8');
   const realRequire=createRequire(path.join(root,manifest.main));
-  const fakeService={stop(){stopped++;},read(args,ctx){events.push({kind:'read',args,ctx});return{status:'read'};},remember(args,ctx){events.push({kind:'remember',args,ctx});return{status:'skipped'};},reportOutdated(args,ctx){events.push({kind:'outdated',args,ctx});return{status:'reported'};},renderer(method,args){return{method,args};}};
+  const fakeService={update(){return{status:'updated'};},delete(){return{status:'deleted'};},stop(){stopped++;},read(args,ctx){events.push({kind:'read',args,ctx});return{status:'read'};},remember(args,ctx){events.push({kind:'remember',args,ctx});return{status:'skipped'};},reportOutdated(args,ctx){events.push({kind:'outdated',args,ctx});return{status:'reported'};},renderer(method,args){return{method,args};}};
   const sandbox={module:{exports:{}},require:name=>name==='./memory-service.js'?{createService:()=>fakeService}:realRequire(name),pi:{agent:{registerTool:async x=>registered.push(x),unregisterTool:async name=>removed.push(name)}}};
   vm.runInNewContext(source,sandbox);await sandbox.module.exports.onLoad();
-  assert.deepEqual(registered.map(t=>t.name),['read_memory','remember','report_outdated_memory']);assert.equal(events.length,0);
+  assert.deepEqual(registered.map(t=>t.name),manifest.contributes.agentTools.map(t=>t.name));assert.equal(events.length,0);
   const ctx={sessionId:'real-session',turnId:'real-turn'};
   await registered[0].execute({},ctx);await registered[1].execute({items:[]},ctx);await registered[2].execute({items:[]},ctx);
   assert.ok(events.every(e=>e.ctx===ctx));assert.equal(events[2].kind,'outdated');
-  await sandbox.module.exports.onUnload();assert.equal(stopped,1);assert.deepEqual(removed,['read_memory','remember','report_outdated_memory']);
+  await sandbox.module.exports.onUnload();assert.equal(stopped,1);assert.deepEqual(removed,manifest.contributes.agentTools.map(t=>t.name));
   await assert.rejects(sandbox.module.exports.onRendererCall('next',{}),/not loaded/);
 });
 
@@ -156,4 +177,47 @@ test('outdated reason/evidence are rendered as text, including HTML-like payload
   const r=await rendererHarness(async()=>value);try{const tree=r.render(props(value),'report_outdated_memory');
     assert.equal(nodes(tree,'img').length,0);assert.equal(nodes(tree,'script').length,0);assert.match(text(tree),/<script>/);
   }finally{r.cleanup();}
+});
+
+const finalId='12345678-1234-1234-1234-123456789abc';
+const marker=`<!-- knowstack-outdated:${finalId} -->`;
+const finalProps=(content=`任务结束。\n${marker}`)=>({sessionId:'a',messageId:'final',message:{id:'final',role:'assistant',content}});
+test('final-answer entry independently loads the real report with tool cards never mounted',async()=>{
+  const value={...warning,reportId:finalId};
+  const r=await rendererHarness(async(method,args)=>{assert.equal(method,'outdated');assert.equal(args.reportId,finalId);assert.equal(args.sessionId,'a');return{...value,items:value.items.map(i=>({...i,state:args.action==='dismiss'?'dismissed':'pending'}))};});
+  try{
+    let tree=r.render(finalProps(),'entryExtra');assert.match(text(tree),/正在核对提醒/);assert.equal(nodes(tree,'button').length,0);
+    await tick();tree=r.render(finalProps(),'entryExtra');assert.match(text(tree),/过时记忆待检查/);assert.match(text(tree),/旧构建规则/);
+    assert.equal(nodes(tree,'section')[0].props['aria-live'],'polite');assert.equal(nodes(tree,'details').length,2);
+    assert.deepEqual(nodes(tree,'button').map(n=>text(n)),['打开记忆并定位','本次忽略']);
+    const calls=r.calls.length;tree=r.render(finalProps(),'entryExtra');await tick();assert.equal(r.calls.length,calls,'new props object must not refetch on every stream update');
+    await nodes(tree,'button')[1].props.onClick();tree=r.render(finalProps(),'entryExtra');assert.match(text(tree),/本次已忽略/);assert.equal(nodes(tree,'button').length,0);
+  }finally{r.cleanup();}
+});
+test('unmarked, malformed, mismatched and user messages render no final card and make no lookup',async()=>{
+  const r=await rendererHarness();try{
+    for(const p of [finalProps('普通结果'),finalProps('<!-- knowstack-outdated:invented -->'),{...finalProps(),messageId:'wrong'},{...finalProps(),sessionId:''},{...finalProps(),message:{...finalProps().message,role:'user'}}])assert.equal(r.render(p,'entryExtra'),null);
+    assert.equal(r.calls.some(c=>c.method==='outdated'),false);
+  }finally{r.cleanup();}
+});
+test('copied cross-session marker and unloaded final reminder never reveal original memory or enable controls',async()=>{
+  for(const cause of ['another session','expired']){
+    const r=await rendererHarness(async()=>{throw Error(cause);});try{
+      r.render(finalProps(),'entryExtra');await tick();const tree=r.render(finalProps(),'entryExtra');
+      assert.match(text(tree),/提醒已失效或连接不可用/);assert.doesNotMatch(text(tree),/旧构建规则/);assert.equal(nodes(tree,'button').length,0);
+    }finally{r.cleanup();}
+  }
+});
+test('final marker extraction accepts host text parts, deduplicates and bounds report cards',async()=>{
+  const {finalReminderIds}=await import('../renderer/outdated-ui.mjs');
+  assert.deepEqual(finalReminderIds({role:'assistant',content:[{type:'thinking',text:marker},{type:'text',text:`${marker}\n${marker}`}]}),[finalId]);
+  assert.deepEqual(finalReminderIds({role:'assistant',text:marker}),[finalId]);
+  assert.deepEqual(finalReminderIds({role:'assistant',content:[{type:'toolCall',text:marker}]}),[]);
+  assert.deepEqual(finalReminderIds({role:'assistant',content:`prefix ${marker}`}),[]);
+  assert.equal(finalReminderIds({role:'assistant',content:[1,2,3,4].map(n=>marker.replace('12345678',`1234567${n}`)).join('\n')}).length,3);
+});
+test('receipt markers inside fenced examples, indented code and quotes do not attach final cards',async()=>{
+  const {finalReminderIds}=await import('../renderer/outdated-ui.mjs');
+  for(const content of [`\`\`\`html\n${marker}\n\`\`\``,`~~~text\n${marker}\n~~~`,`    ${marker}`,`> ${marker}`])assert.deepEqual(finalReminderIds({role:'assistant',content}),[]);
+  assert.deepEqual(finalReminderIds({role:'assistant',content:`\`\`\`\nexample\n\`\`\`\n${marker}`}),[finalId]);
 });

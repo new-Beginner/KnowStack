@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>跨项目对话切换回归</title><style>body{margin:0;overflow:hidden;font:14px system-ui;background:#eef3f7}main{padding:24px;max-width:55%;height:100vh;box-sizing:border-box;overflow:auto}button{margin:0 10px 12px 0;padding:8px}iframe{position:fixed;right:0;top:0;width:min(420px,100%);height:100%;border:0}pre{white-space:pre-wrap}</style></head>
+<body><main><h1>跨项目对话 · 已打开记忆侧栏</h1><p>按宿主的缓存规则保留同一正式页面，不重新加载 iframe。</p><button id="a">项目 A 对话</button><button id="b">项目 B 对话</button><pre id="results">加载中</pre></main><iframe id="dock" src="../renderer/memory-view.html"></iframe>
+<script type="module">
+import {bootMemoryView} from '../renderer/memory-view.mjs';
+const frame=document.getElementById('dock');if(!frame.contentDocument?.getElementById('memory-root'))await new Promise(r=>frame.onload=r);
+const doc=frame.contentDocument,handlers=new Map(),calls=[],metrics=[];let selected='a',writes=0,token=0;
+const pause=ms=>new Promise(r=>setTimeout(r,ms));const snapshot=()=>({sessionId:selected,projectPath:'D:/Projects/'+selected.toUpperCase()});
+const bridge={on(event,fn){handlers.set(event,fn);return()=>handlers.delete(event);},async invoke(channel,args){
+  const target=snapshot(),call={channel,sessionId:args?.sessionId||target.sessionId,started:performance.now()};calls.push(call);
+  if(channel==='app.getAppearance')return{base:new URLSearchParams(location.search).get('theme')||'light',locale:'zh-CN'};
+  await pause(channel==='memory.mode'?30:20);
+  if(channel==='memory.context')return target;
+  if(args.sessionId!==selected)throw Error('PANEL_CONTEXT_CHANGED');
+  if(channel==='memory.mode')return{autoSave:true,autoDelete:false};
+  if(channel==='memory.editor'){if(args.action==='save')writes++;return{status:'read',readToken:'t'+token++,project:{key:'group:'+selected,name:'项目 '+selected.toUpperCase(),path:target.projectPath.toLowerCase(),paths:[target.projectPath.toLowerCase()]},entries:[{id:'rule-'+selected,title:'项目 '+selected.toUpperCase()+' 专属记忆',content:'仅属于项目 '+selected.toUpperCase()+'，切换后应显示目标项目而非上一项目。'}]};}
+  throw Error('unknown channel');
+}};
+const view=await bootMemoryView(bridge,doc);const wait=async id=>{for(let i=0;i<500;i++){const s=view.editor.getState();if(s.projectKey==='group:'+id&&s.loaded&&!s.busy)return;await pause(10);}throw Error('target load timeout '+id);};
+for(const id of ['a','b'])document.getElementById(id).onclick=()=>{selected=id;handlers.get('session:activated')?.({...snapshot(),activeTurn:null});};
+await wait('a');await view.client.refresh();
+window.runBrowserTests=async()=>{try{
+ const originalRoot=doc.querySelector('.knowstack-editor');
+ for(const id of ['b','a','b','a','b','a']){
+  await view.client.refresh();await pause(10);const offset=calls.length,start=performance.now();document.getElementById(id).click();await wait(id);
+  const read=calls.slice(offset).find(c=>c.channel==='memory.editor'&&c.sessionId===id);
+  if(!read)throw Error('missing target read');
+  metrics.push({target:id,requestStartMs:read.started-start,visibleMs:performance.now()-start});
+  if(doc.querySelector('.knowstack-editor')!==originalRoot)throw Error('view remounted');
+  if(!doc.querySelector('textarea').value.includes('项目 '+id.toUpperCase()))throw Error('wrong rendered memory');
+ }
+ if(writes!==0)throw Error('switch wrote memory');
+ if(!new URLSearchParams(location.search).has('baseline')&&metrics.some(m=>m.requestStartMs>350))throw Error('activation still waits for polling');
+ const result={passed:9,failed:0,metrics,writes,retainedView:true};document.getElementById('results').textContent=JSON.stringify(result,null,2);return result;
+}catch(error){return{passed:0,failed:1,error:error.message,metrics};}};
+</script></body></html>

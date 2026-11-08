@@ -62,9 +62,10 @@ async function rig(t, options = {}) {
     advance:ms=>{clock+=ms;}, writes:()=>calls.filter(c=>c.key.endsWith('Save'))};
 }
 
-test('0.5.0 manifest loads append and read-only reminder tools without extra permissions',()=>{
-  assert.equal(manifest.version,'0.5.0'); assert.equal(manifest.main,'main.js');
-  assert.deepEqual(manifest.contributes.agentTools.map(t=>t.name),['read_memory','remember','report_outdated_memory']);
+test('0.6.3 manifest declares formal docked view and minimal permissions',()=>{
+  assert.equal(manifest.version,'0.6.3'); assert.equal(manifest.main,'main.js');
+  assert.deepEqual(manifest.contributes.agentTools.map(t=>t.name),['read_memory','remember','report_outdated_memory','update_memory','delete_memory']);
+  assert.ok(manifest.permissions.includes('ui.view'));assert.equal(manifest.contributes.views[0].entry,'renderer/memory-view.html');
   assert.ok(!manifest.permissions.some(p=>/^fs\.|net\.|desktop\./.test(p)));
   assert.deepEqual(manifest.contributes.agentExtensions,['knowstack-extension.js']);
   assert.equal(manifest.contributes.settings.find(x=>x.key==='autoSave').default,true);
@@ -239,7 +240,7 @@ test('parallel sessions sharing a group cannot overwrite each other locally',asy
 });
 test('extension guidance and receipts never add a second memory store or claim unsaved data',()=>{
   const hooks=require('../knowstack-extension.js')._internals;
-  assert.match(hooks.beforeStart({systemPrompt:'base'}).systemPrompt,/No new knowledge means no memory tool call/);
+  assert.match(hooks.beforeStart({systemPrompt:'base'}).systemPrompt,/No new knowledge means no remember call/);
   const name='plugin_local_project_memory_api_probe_remember';
   assert.equal(hooks.receipt({toolName:name,details:{status:'awaiting_review',saved:[]}}),undefined);
   assert.equal(hooks.receipt({toolName:name,details:{status:'unverified',saved:[]}}),undefined);
@@ -350,6 +351,125 @@ test('unloaded/recreated service has no actionable old reminder and loading neve
 test('guidance forbids GUI/shell deletion and distinguishes obsolescence evidence from age',()=>{
   const {GUIDANCE,receipt}=require('../knowstack-extension.js')._internals;
   assert.match(GUIDANCE,/plugin_local_project_memory_api_probe_report_outdated_memory/);
-  assert.match(GUIDANCE,/GUI automation, shell or other tools/);assert.match(GUIDANCE,/Age, non-use/);
+  assert.match(GUIDANCE,/Never use shell, GUI automation, database access or another tool to bypass/);assert.match(GUIDANCE,/Age, non-use/);
   assert.equal(receipt({toolName:'plugin_local_project_memory_api_probe_report_outdated_memory',details:{status:'reported'}}),undefined);
+});
+
+test('report returns a final-answer receipt bound to its real ID, skipped reports have no marker',async t=>{
+  const r=await rig(t);const result=await reportOld(r,await r.read());
+  assert.match(result.finalReminder,/⚠️ 知栈/);assert.ok(result.finalReminder.includes(old.title));
+  const {finalReminderIds}=await import('../renderer/outdated-ui.mjs');
+  assert.deepEqual(finalReminderIds({role:'assistant',content:result.finalReminder}),[result.reportId]);
+  assert.equal((await reportOld(r,await r.read())).finalReminder,undefined);
+  assert.equal(r.writes().length,0);
+  const {GUIDANCE}=require('../knowstack-extension.js')._internals;
+  assert.match(GUIDANCE,/finalReminder VERBATIM/);assert.match(GUIDANCE,/FINAL answer/);assert.match(GUIDANCE,/Do not invent report IDs/);
+});
+
+test('opening read and end-of-turn assessment with no novel lesson leave native memory unchanged',async t=>{
+  const r=await rig(t);const before=clone([...r.stores]);
+  for(const turn of ['turn1','turn2']) {
+    const opening=await r.read('a',turn);assert.equal(opening.status,'read');assert.equal(opening.autoSave,true);
+    assert.deepEqual(opening.entries,[old]);
+  }
+  assert.equal(r.writes().length,0);assert.deepEqual([...r.stores],before);
+});
+test('start reminder and end automatic save coexist without deleting the original entry',async t=>{
+  const r=await rig(t);const opening=await r.read();const reminder=await reportOld(r,opening);
+  assert.equal(reminder.status,'reported');assert.equal(r.writes().length,0);
+  r.advance(300001);const closing=await r.read();const saved=await r.remember(closing);
+  assert.equal(saved.status,'saved');assert.equal(r.writes().length,1);assert.deepEqual(r.stores.get('ga')[0],old);
+  assert.equal((await inspectOld(r,reminder)).items[0].state,'pending');
+  assert.equal((await r.remember(await r.read('a','turn2'),[lesson],'a','turn2')).status,'skipped');
+  assert.equal(r.writes().length,1);
+});
+test('long turn refreshes expired opening basis and preserves a concurrent user memory before saving',async t=>{
+  const r=await rig(t);const opening=await r.read();r.advance(300001);
+  await assert.rejects(r.remember(opening),/Read current native memory/);
+  r.stores.get('ga').push({id:'user-extra',title:'用户新增约定',content:'长任务期间用户新增的约定必须保留。'});
+  const closing=await r.read();assert.equal(closing.entries.length,2);
+  assert.equal((await r.remember(closing)).status,'saved');assert.equal(r.stores.get('ga').length,3);
+  assert.equal(r.stores.get('ga')[1].id,'user-extra');assert.equal(r.writes().length,1);
+});
+test('start check does not override manual mode at end-of-turn save',async t=>{
+  const r=await rig(t,{autoSave:false});assert.equal((await r.read()).autoSave,false);
+  const result=await r.remember(await r.read());assert.equal(result.status,'awaiting_review');
+  assert.equal(r.writes().length,0);assert.equal(r.config.autoSave,false);
+});
+
+test('updates preserve ID and unrelated memories, without an enable switch',async t=>{
+  const r=await rig(t,{autoSave:false});const b=await r.read();
+  const result=await r.pump(r.service.update({readToken:b.readToken,items:[{memoryId:old.id,title:'长期项目约束',content:'仓库主分支调整，但不可修改宿主的约束仍然适用。',evidence:'用户明确更新了分支约定。'}]},r.ctx()));
+  assert.equal(result.status,'updated');assert.equal(result.updated[0].id,old.id);assert.equal(r.stores.get('ga')[0].id,old.id);assert.equal(r.writes().length,1);
+});
+test('autonomous deletion is refused by default, then only deletes named IDs',async t=>{
+  const r=await rig(t);let b=await r.read();
+  const args={readToken:b.readToken,items:[{memoryId:old.id,reason:'明确废弃',evidence:'用户明确取消该约定。'}]};
+  assert.equal((await r.pump(r.service.delete(args,r.ctx()))).errorCode,'AUTO_DELETE_DISABLED');assert.equal(r.writes().length,0);
+  r.config.autoDelete=true;b=await r.read();args.readToken=b.readToken;
+  const result=await r.pump(r.service.delete(args,r.ctx()));assert.equal(result.status,'deleted');assert.deepEqual(result.deleted,[old]);assert.equal(r.stores.get('ga').length,0);
+});
+test('mutation needs evidence, known ID and fresh same-session basis',async t=>{
+  const r=await rig(t);r.config.autoDelete=true;const b=await r.read();
+  for(const items of [[{memoryId:'missing',reason:'明确废弃',evidence:'用户说明'}],[{memoryId:old.id,reason:'过时',evidence:''}]])await assert.rejects(r.service.delete({readToken:b.readToken,items},r.ctx()));
+  await assert.rejects(r.service.update({readToken:b.readToken,items:[{memoryId:old.id,...lesson,evidence:'已验证'}]},r.ctx('b')));
+  assert.equal(r.writes().length,0);
+});
+test('concurrent native edits refuse mutation instead of overwriting',async t=>{
+  const r=await rig(t);const b=await r.read();r.stores.get('ga').push({id:'other',title:'其他条目',content:'保留我'});
+  const result=await r.pump(r.service.update({readToken:b.readToken,items:[{memoryId:old.id,...lesson,evidence:'用户更新'}]},r.ctx()));
+  assert.equal(result.status,'failed');assert.equal(result.errorCode,'STALE_BASIS');assert.equal(r.writes().length,0);
+});
+
+test('turning deletion off while queued prevents autonomous write',async t=>{
+  const r=await rig(t);r.config.autoDelete=true;const b=await r.read();
+  const pending=r.service.delete({readToken:b.readToken,items:[{memoryId:old.id,reason:'规则废弃',evidence:'用户明确取消'}]},r.ctx());await tick();await tick();r.config.autoDelete=false;
+  const result=await r.pump(pending);assert.equal(result.errorCode,'AUTO_DELETE_DISABLED');assert.equal(r.writes().length,0);
+});
+test('update and deletion lost response each block further writes without replay',async t=>{
+  for(const op of ['update','delete']){
+    const r=await rig(t,{loseSaveResponse:true});r.config.autoDelete=true;const b=await r.read();
+    const items=op==='update'?[{memoryId:old.id,...lesson,evidence:'新事实已验证'}]:[{memoryId:old.id,reason:'明确废弃',evidence:'用户明确说明'}];
+    const result=await r.pump(r.service[op]({readToken:b.readToken,items},r.ctx()));assert.equal(result.status,'unverified');assert.equal(r.writes().length,1);
+    const next=await r.remember(await r.read(),[{title:'禁止补写',content:'上次写入未确认前不能继续写入新的项目事实。'}]);
+    assert.equal(next.errorCode,'PREVIOUS_WRITE_UNVERIFIED');assert.equal(r.writes().length,1);
+  }
+});
+test('editor saves use fresh native snapshots, one-use tokens and preserve user IDs',async t=>{
+  const r=await rig(t);const context={sessionId:'a',turnId:'editor:a'};
+  const b=await r.pump(r.service.editor({action:'read'},context));assert.equal(b.project.key,'group:ga');
+  const entries=[{...old,content:'用户修改后的长期约束'}];const args={action:'save',readToken:b.readToken,entries};
+  const result=await r.pump(r.service.editor(args,context));assert.equal(result.status,'replaced');assert.equal(r.stores.get('ga')[0].id,old.id);
+  assert.equal((await r.pump(r.service.editor(args,context))).errorCode,'STALE_BASIS');assert.equal(r.writes().length,1);
+});
+test('update preserves every unrelated entry and queued renderer job cannot be claimed twice',async t=>{
+  const extra={id:'keep',title:'独立项目约束',content:'不可修改宿主源码'};const r=await rig(t,{entries:[old,extra]});const b=await r.read();
+  const pending=r.service.update({readToken:b.readToken,items:[{memoryId:old.id,...lesson,evidence:'新事实已核对'}]},r.ctx());await tick();await tick();
+  const jobs=await Promise.all([r.service.renderer('next',{lease:r.lease}),r.service.renderer('next',{lease:r.lease})]);assert.equal(jobs.filter(Boolean).length,1);
+  const job=jobs.find(Boolean);await r.service.renderer('report',{lease:r.lease,id:job.id,result:await r.native.runNativeJob(r.bridge,job)});
+  assert.equal((await pending).status,'updated');assert.deepEqual(r.stores.get('ga')[1],extra);
+});
+test('permission revoked just before delete save is enforced by final renderer authorization',async t=>{
+  const r=await rig(t);r.config.autoDelete=true;const b=await r.read();
+  const pending=r.service.delete({readToken:b.readToken,items:[{memoryId:old.id,reason:'已废弃',evidence:'用户明确说明'}]},r.ctx());await tick();await tick();
+  const job=await r.service.renderer('next',{lease:r.lease});r.config.autoDelete=false;
+  const result=await r.native.runNativeJob(r.bridge,job,{authorize:async()=> (await r.service.renderer('authorize',{lease:r.lease,id:job.id})).allowed});
+  await r.service.renderer('report',{lease:r.lease,id:job.id,result});assert.equal((await pending).errorCode,'AUTO_DELETE_DISABLED');assert.equal(r.writes().length,0);
+});
+
+test('two renderers cannot claim the same append while awaiting settings',async t=>{
+  const r=await rig(t);const b=await r.read();const pending=r.service.remember({readToken:b.readToken,items:[lesson]},r.ctx());await tick();await tick();
+  const jobs=await Promise.all([r.service.renderer('next',{lease:r.lease}),r.service.renderer('next',{lease:r.lease})]);
+  assert.equal(jobs.filter(Boolean).length,1);const job=jobs.find(Boolean);
+  await r.service.renderer('report',{lease:r.lease,id:job.id,result:await r.native.runNativeJob(r.bridge,job)});assert.equal((await pending).status,'saved');assert.equal(r.writes().length,1);
+});
+test('read returns the trusted source session ID for durable conversation indexes',async t=>{
+  const r=await rig(t);const result=await r.read('a');assert.equal(result.sessionId,'a');assert.equal(result.autoDelete,false);assert.equal(r.writes().length,0);
+});
+
+test('editor displays the existing host project name instead of its directory path',async t=>{
+  const r=await rig(t);r.groups[0].name='用户重命名的项目';
+  const result=await r.pump(r.service.editor({action:'read'},r.ctx()));
+  assert.equal(result.status,'read');assert.equal(result.project.name,'用户重命名的项目');
+  assert.equal(result.project.path,'d:/alpha');assert.equal(r.writes().length,0);
 });

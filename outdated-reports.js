@@ -24,7 +24,9 @@ function createOutdatedReports({ session, readNative, getBasis, now = Date.now }
   const records = new Map(); const seen = new Set();
   let stopped = false;
   const view = record => copy({ status: record.status, reportId: record.id, sessionId: record.owner.sessionId,
-    items: record.items, errorCode: record.errorCode, saved: [], notice: 'Reminder only. Native memory has not been modified; deletion is a manual user action.' });
+    items: record.items, errorCode: record.errorCode, saved: [],
+    finalReminder: `⚠️ 知栈：${record.items.length} 条疑似过时记忆待检查，是否删除由你决定。\n${record.items.map(item => `- ${JSON.stringify(item.title || '未命名记忆')}`).join('\n')}\n<!-- knowstack-outdated:${record.id} -->`,
+    notice: 'Reminder only. Native memory has not been modified; deletion is a manual user action. Append finalReminder verbatim at the end of the final answer (not in a code fence) so the user sees the reminder outside tool logs.' });
   const invalidate = (record, errorCode) => {
     record.status = 'expired'; record.errorCode = errorCode;
     for (const item of record.items) if (item.state === 'pending') item.state = 'unavailable';
